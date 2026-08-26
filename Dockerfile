@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     libfreetype6-dev \
     zip \
     unzip \
+    curl \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install mysqli pdo pdo_mysql gd \
     && a2enmod rewrite \
@@ -38,3 +39,9 @@ RUN chown -R www-data:www-data /var/www/html \
 COPY app/.env.example /var/www/html/.env.example
 
 EXPOSE 80
+
+# Tell orchestrators (and HostForge) how to verify the app is alive
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost/landing.php || exit 1
+
+CMD ["apache2-foreground"]
