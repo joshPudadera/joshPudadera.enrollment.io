@@ -44,6 +44,6 @@ EXPOSE 80
 
 # Health check using the PORT env var (defaults to 80)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f "http://localhost:${PORT:-80}/landing.php" || exit 1
+    CMD curl -fL "http://localhost:${PORT:-80}/" || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
