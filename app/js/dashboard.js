@@ -114,6 +114,9 @@ function closeModal(id) {
 }
 
 document.addEventListener('click', function(e) {
+    // Prevent clicks inside a modal from closing it via the overlay handler.
+    // We do NOT stopPropagation here — that would break buttons inside modals.
+    if (e.target.closest('.modal')) return;
     var closeBtn = e.target.closest('[data-close]');
     if (closeBtn) { closeModal(closeBtn.dataset.close); return; }
     if (e.target.classList.contains('modal-overlay')) e.target.classList.remove('active');
@@ -127,12 +130,7 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-document.addEventListener('click', function(e) {
-    var modalContent = e.target.closest('.modal');
-    if (modalContent) {
-        e.stopPropagation();
-    }
-}, true);
+
 
 // ============================================================
 //  3b. ALERT MODAL (replaces native alert())

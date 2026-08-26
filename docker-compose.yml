@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # ── PHP + Apache web server ───────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bcp_sms_app
+    ports:
+      - "8080:80"
+    environment:
+      - DB_HOST=db
+      - DB_USER=sms_user
+      - DB_PASS=sms_password
+      - DB_NAME=sms_db
+    volumes:
+      - ./app:/var/www/html
+      - uploads_req:/var/www/html/requirements/uploads
+      - uploads_enr:/var/www/html/enrollment_tab/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - sms_network
+    restart: unless-stopped
+
+  # ── MySQL database ─────────────────────────────────────────────
+  db:
+    image: mysql:8.0
+    container_name: bcp_sms_db
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: sms_db
+      MYSQL_USER: sms_user
+      MYSQL_PASSWORD: sms_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sms_network
+    restart: unless-stopped
+
+  # ── phpMyAdmin (optional, for DB management) ──────────────────
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: bcp_sms_phpmyadmin
+    ports:
+      - "8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_USER: sms_user
+      PMA_PASSWORD: sms_password
+    depends_on:
+      - db
+    networks:
+      - sms_network
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  uploads_req:
+  uploads_enr:
+
+networks:
+  sms_network:
+    driver: bridge

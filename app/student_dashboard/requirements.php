@@ -30,7 +30,86 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
 
 // ── SUBMIT all docs (run AI + save to DB) ───────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'submit_all') {
-    header('Location: ../requirements/submit.php'); exit;
+    require_once __DIR__ . '/../shared/ai_inspect.php';
+
+    $uploaded_submit = $_SESSION['uploaded_docs'] ?? [];
+    if (!empty($uploaded_submit)) {
+        // Run AI inspection on every uploaded document
+        $ai_inspected = 0;
+        foreach ($uploaded_submit as &$doc) {
+            if (!empty($doc['ai_result'])) continue;
+            $abs_path = __DIR__ . '/../requirements/' . $doc['file_path'];
+            $result   = ai_inspect_document($abs_path, $doc['type']);
+            if ($result['success']) {
+                $doc['ai_result'] = $result;
+                $ai_inspected++;
+            }
+        }
+        unset($doc);
+        $_SESSION['uploaded_docs'] = $uploaded_submit;
+
+        // Save to enrollment_documents
+        $saved = 0;
+        if (enrollment_tables_exist($conn)) {
+            $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
+            $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL");
+
+            $pre_reg_id = null;
+            foreach ($uploaded_submit as $doc) {
+                if (!empty($doc['pre_reg_id'])) { $pre_reg_id = (int)$doc['pre_reg_id']; break; }
+            }
+            if (!$pre_reg_id) {
+                $r = $conn->prepare("SELECT id FROM pre_registrations WHERE user_id=? ORDER BY submitted_at DESC LIMIT 1");
+                $r->bind_param('i', $uid);
+                $r->execute();
+                $row = $r->get_result()->fetch_assoc();
+                $r->close();
+                if ($row) $pre_reg_id = $row['id'];
+            }
+
+            $type_map = [
+                'Form138'=>'Form137','Form137'=>'Form137','GoodMoral'=>'GoodMoral',
+                'BirthCertificate'=>'BirthCertificate','IDPhoto'=>'IDPhoto',
+                'MedicalCert'=>'Other','BarangayClearance'=>'Other',
+                'TranscriptOfRecords'=>'Other','HonorableDismissal'=>'Other',
+                'NCEEResult'=>'Other','ESCCertificate'=>'Other',
+                'Diploma'=>'Other','Other'=>'Other',
+            ];
+
+            if ($pre_reg_id && $uid) {
+                foreach ($uploaded_submit as $doc) {
+                    $db_type  = $type_map[$doc['type']] ?? 'Other';
+                    $fname    = $doc['file_name'];
+                    $fpath    = $doc['file_path'];
+                    $fsize    = (int)$doc['file_size'];
+                    $ai_json  = !empty($doc['ai_result']) ? json_encode($doc['ai_result']) : null;
+                    $ai_time  = !empty($doc['ai_result']['inspected_at']) ? $doc['ai_result']['inspected_at'] : null;
+
+                    // Skip if this exact file_path is already saved (prevents double-save)
+                    $chk = $conn->prepare("SELECT id FROM enrollment_documents WHERE file_path=? AND user_id=? LIMIT 1");
+                    $chk->bind_param('si', $fpath, $uid);
+                    $chk->execute();
+                    $already = $chk->get_result()->num_rows > 0;
+                    $chk->close();
+                    if ($already) continue;
+
+                    $stmt = $conn->prepare(
+                        "INSERT INTO enrollment_documents
+                            (pre_reg_id, user_id, document_type, file_name, file_path, file_size,
+                             status, ai_result, ai_inspected_at)
+                         VALUES (?,?,?,?,?,?,'Pending',?,?)"
+                    );
+                    $stmt->bind_param('iisssiss', $pre_reg_id, $uid, $db_type, $fname, $fpath, $fsize, $ai_json, $ai_time);
+                    if ($stmt->execute()) $saved++;
+                    $stmt->close();
+                }
+            }
+        }
+
+        $msg = count($uploaded_submit) . ' document' . (count($uploaded_submit) !== 1 ? 's' : '') . ' submitted successfully!';
+        if ($saved > 0) $msg .= " $saved record" . ($saved !== 1 ? 's' : '') . ' saved to your enrollment file.';
+        unset($_SESSION['uploaded_docs']);
+    }
 }
 
 // ── UPLOAD a new file ───────────────────────────────────────────

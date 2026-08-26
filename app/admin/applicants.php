@@ -45,6 +45,26 @@ require_once __DIR__ . '/../admin_dashboard/sidebar.php';
   <title>Applicants – Admin</title>
   <link rel="stylesheet" href="../css/dashboard.css"/>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"/>
+  <style>
+    .btn-primary, .btn-approve, .btn-reject, .btn-secondary, .btn-view-file, .btn-add {
+      font-family: 'Segoe UI', sans-serif; font-size: .82rem; font-weight: 700;
+      cursor: pointer; border: none; border-radius: 8px; padding: 8px 18px;
+      display: inline-flex; align-items: center; gap: 7px;
+      text-decoration: none; transition: background .15s;
+    }
+    .btn-primary  { background: #1a3a8c; color: #fff; }
+    .btn-primary:hover  { background: #142d6e; }
+    .btn-approve  { background: #16a34a; color: #fff; }
+    .btn-approve:hover  { background: #15803d; }
+    .btn-reject   { background: #ef4444; color: #fff; }
+    .btn-reject:hover   { background: #dc2626; }
+    .btn-secondary{ background: #f3f4f6; color: #444; border: 1.5px solid #d0d7e2; }
+    .btn-secondary:hover{ background: #e5e7eb; }
+    .btn-view-file{ background: #eff6ff; color: #2563eb; border: 1.5px solid #bfdbfe; }
+    .btn-view-file:hover{ background: #dbeafe; }
+    .btn-add      { background: #22c55e; color: #fff; }
+    .btn-add:hover{ background: #16a34a; }
+  </style>
 </head>
 <body>
 <div class="main">

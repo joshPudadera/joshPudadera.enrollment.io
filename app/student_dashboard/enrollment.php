@@ -16,33 +16,32 @@ $apps_result = $r->get_result();
 while ($row = $apps_result->fetch_assoc()) $apps[] = $row;
 $r->close();
 
-// Fetch all uploaded documents for this user (by pre_reg_id OR user_id directly)
-$docs = [];
-$app_ids = array_column($apps, 'id');
-if (!empty($app_ids)) {
-    $ids = implode(',', array_map('intval', $app_ids));
-    $res = $conn->query(
-        "SELECT d.*, p.course FROM enrollment_documents d
-         JOIN pre_registrations p ON d.pre_reg_id = p.id
-         WHERE d.pre_reg_id IN ($ids) ORDER BY d.uploaded_at DESC"
+// Fetch enrollment records (ID number, section, year level) for each application
+$enrollments_map = [];
+if (!empty($apps)) {
+    $app_ids_str = implode(',', array_map('intval', array_column($apps, 'id')));
+    $enr_res = $conn->query(
+        "SELECT e.pre_reg_id, e.id_number, e.section, e.year_level, e.school_year, e.semester
+         FROM enrollments e
+         WHERE e.pre_reg_id IN ($app_ids_str)"
     );
-    if ($res) while ($row = $res->fetch_assoc()) $docs[] = $row;
+    if ($enr_res) while ($enr_row = $enr_res->fetch_assoc()) {
+        $enrollments_map[(int)$enr_row['pre_reg_id']] = $enr_row;
+    }
 }
-// Also fetch documents linked directly by user_id (uploaded via student dashboard)
-$res2 = $conn->query(
+
+// Fetch all uploaded documents for this user — one query, no duplicates
+// Union: docs linked via pre_reg_id + any docs linked only via user_id
+$docs = [];
+$res = $conn->query(
     "SELECT d.*, COALESCE(p.course,'') AS course
      FROM enrollment_documents d
      LEFT JOIN pre_registrations p ON d.pre_reg_id = p.id
-     WHERE d.user_id = $uid ORDER BY d.uploaded_at DESC"
+     WHERE d.user_id = $uid
+     ORDER BY d.uploaded_at DESC"
 );
-if ($res2) {
-    while ($row = $res2->fetch_assoc()) {
-        // Avoid duplicates
-        $exists = false;
-        foreach ($docs as $ex) { if ($ex['id'] === $row['id']) { $exists = true; break; } }
-        if (!$exists) $docs[] = $row;
-    }
-}
+if ($res) while ($row = $res->fetch_assoc()) $docs[(int)$row['id']] = $row;
+$docs = array_values($docs); // re-index
 
 $status_steps = ['Pending'=>1,'Approved'=>2,'Enrolled'=>3];
 $doc_type_labels = [
@@ -95,14 +94,6 @@ $doc_type_labels = [
       $si     = match($app['status']) {'Approved'=>'fa-circle-check','Rejected'=>'fa-circle-xmark','Enrolled'=>'fa-id-badge',default=>'fa-clock'};
       $course_short = preg_replace('/Bachelor of Science in /i','BS ',$app['course']);
       $app_docs = array_filter($docs, fn($d) => (int)$d['pre_reg_id'] === (int)$app['id']);
-      // Also include docs with no pre_reg_id under the first/most recent application
-      if ($app === $apps[0]) {
-          foreach ($docs as $d) {
-              if (empty($d['pre_reg_id'])) {
-                  $app_docs[] = $d;
-              }
-          }
-      }
       $ref_num  = !empty($app['ref_number']) ? $app['ref_number'] : ('BCP-REF-' . str_pad($app['id'], 6, '0', STR_PAD_LEFT));
       $ref_id   = 'app-ref-' . $app['id'];
     ?>
@@ -188,7 +179,9 @@ $doc_type_labels = [
       <!-- Application details -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 20px;
                   font-size:.82rem;margin-bottom:20px;">
-        <?php $fields = [
+        <?php
+        $enr_data = $enrollments_map[(int)$app['id']] ?? null;
+        $fields = [
           'Full Name'   => htmlspecialchars($app['first_name'].' '.$app['last_name']),
           'Email'       => htmlspecialchars($app['email']),
           'Phone'       => htmlspecialchars($app['phone']),
@@ -203,6 +196,39 @@ $doc_type_labels = [
           <div style="color:#1a1a2e;"><?= $val ?></div>
         </div>
         <?php endforeach; ?>
+
+        <?php if ($enr_data): ?>
+        <!-- Enrollment details from admin -->
+        <div style="grid-column:1/-1;border-top:1px solid #f0f2f5;padding-top:12px;margin-top:4px;">
+          <div style="font-size:.72rem;font-weight:700;color:#1a3a8c;text-transform:uppercase;
+                      letter-spacing:.04em;margin-bottom:10px;">
+            <i class="fa-solid fa-id-badge" style="margin-right:5px;"></i>
+            Enrollment Details
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 20px;">
+            <?php
+            $enr_fields = [
+              'Student ID'  => '<code style="font-size:.88rem;font-weight:700;color:#2563eb;background:#eff6ff;padding:3px 10px;border-radius:6px;letter-spacing:.04em;">'.htmlspecialchars($enr_data['id_number']).'</code>',
+              'Section'     => $enr_data['section'] ? '<strong style="color:#1a1a2e;">'.htmlspecialchars($enr_data['section']).'</strong>' : '<span style="color:#aaa;font-style:italic;">Not yet assigned</span>',
+              'Year Level'  => htmlspecialchars($enr_data['year_level'] ?: ($app['year_level'] ?? '—')),
+              'School Year' => htmlspecialchars(($enr_data['school_year'] ?? '2025-2026').' · '.($enr_data['semester'] ?? '1st').' Semester'),
+            ];
+            foreach ($enr_fields as $lbl => $val): ?>
+            <div>
+              <div style="font-size:.68rem;color:#aaa;font-weight:600;text-transform:uppercase;margin-bottom:2px;"><?= $lbl ?></div>
+              <div><?= $val ?></div>
+            </div>
+            <?php endforeach; ?>
+          </div>
+        </div>
+        <?php elseif ($app['status'] === 'Enrolled'): ?>
+        <div style="grid-column:1/-1;margin-top:8px;padding:10px 14px;
+                    background:#fffbeb;border-left:3px solid #f59e0b;border-radius:6px;
+                    font-size:.8rem;color:#92400e;">
+          <i class="fa-solid fa-spinner fa-spin" style="margin-right:6px;"></i>
+          Enrollment details are being finalized. Please check back shortly.
+        </div>
+        <?php endif; ?>
       </div>
 
       <!-- Documents section -->

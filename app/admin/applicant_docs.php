@@ -25,14 +25,26 @@ $pr->bind_param('i', $pre_reg_id); $pr->execute();
 $applicant = $pr->get_result()->fetch_assoc(); $pr->close();
 if (!$applicant) { header('Location: applicants.php'); exit; }
 
-// Fetch documents
+// Fetch documents — by pre_reg_id, and also by user_id as fallback (no duplicates)
 $docs = [];
 $res  = $conn->query(
     "SELECT * FROM enrollment_documents
      WHERE pre_reg_id = $pre_reg_id
      ORDER BY uploaded_at DESC"
 );
-if ($res) while ($r = $res->fetch_assoc()) $docs[] = $r;
+if ($res) while ($r = $res->fetch_assoc()) $docs[(int)$r['id']] = $r;
+
+// Also pull any docs tied only by user_id (orphaned from a pre_reg link)
+if ($applicant['user_id']) {
+    $uid_admin = (int)$applicant['user_id'];
+    $res2 = $conn->query(
+        "SELECT * FROM enrollment_documents
+         WHERE user_id = $uid_admin AND (pre_reg_id IS NULL OR pre_reg_id = 0)
+         ORDER BY uploaded_at DESC"
+    );
+    if ($res2) while ($r = $res2->fetch_assoc()) $docs[(int)$r['id']] = $r;
+}
+$docs = array_values($docs);
 
 $doc_type_labels = [
     'Form137'=>'Form 137','BirthCertificate'=>'PSA Birth Certificate',
@@ -264,34 +276,43 @@ require_once __DIR__ . '/../admin_dashboard/sidebar.php';
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
 <script src="../js/dashboard.js"></script>
 <script>
-document.querySelectorAll('.btn-appdoc-apv').forEach(function(btn) {
-    btn.addEventListener('click', function(e) {
-        e.preventDefault();
-        var docId = btn.dataset.docId;
-        showConfirm('Approve this document?', function() {
-            var form = document.createElement('form');
-            form.method = 'POST';
-            form.innerHTML = '<input type="hidden" name="doc_id" value="' + docId + '"/>' +
-                             '<input type="hidden" name="new_status" value="Approved"/>';
-            document.body.appendChild(form);
-            form.submit();
+// Approve/Reject with inline confirm modal — no dependency on showConfirm timing
+(function() {
+    function makeForm(docId, status) {
+        var f = document.createElement('form');
+        f.method = 'POST';
+        f.innerHTML = '<input type="hidden" name="doc_id" value="' + docId + '"/>' +
+                      '<input type="hidden" name="new_status" value="' + status + '"/>';
+        document.body.appendChild(f);
+        f.submit();
+    }
+
+    function confirmAction(msg, callback) {
+        if (typeof showConfirm === 'function') {
+            showConfirm(msg, callback);
+        } else if (typeof showConfirmModal === 'function') {
+            showConfirmModal(msg, function(ok) { if (ok) callback(); });
+        } else {
+            if (confirm(msg)) callback();
+        }
+    }
+
+    document.querySelectorAll('.btn-appdoc-apv').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            var docId = btn.getAttribute('data-doc-id');
+            confirmAction('Approve this document?', function() { makeForm(docId, 'Approved'); });
         });
     });
-});
-document.querySelectorAll('.btn-appdoc-rej').forEach(function(btn) {
-    btn.addEventListener('click', function(e) {
-        e.preventDefault();
-        var docId = btn.dataset.docId;
-        showConfirm('Reject this document?', function() {
-            var form = document.createElement('form');
-            form.method = 'POST';
-            form.innerHTML = '<input type="hidden" name="doc_id" value="' + docId + '"/>' +
-                             '<input type="hidden" name="new_status" value="Rejected"/>';
-            document.body.appendChild(form);
-            form.submit();
+
+    document.querySelectorAll('.btn-appdoc-rej').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            var docId = btn.getAttribute('data-doc-id');
+            confirmAction('Reject this document?', function() { makeForm(docId, 'Rejected'); });
         });
     });
-});
+}());
 </script>
 </body>
 </html>

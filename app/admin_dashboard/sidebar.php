@@ -41,8 +41,8 @@ $ACTIVE_NAV = $ACTIVE_NAV ?? '';
         <i class="fa-solid fa-user-graduate"></i><span>Students</span><i class="fa-solid fa-chevron-down arrow"></i>
       </button>
       <div class="dropdown-menu" id="a-drop1">
-        <a href="<?= $APP_ROOT ?>admin_dashboard/dashboard.php#crud-table" class="dropdown-item">All Students</a>
-        <a href="<?= $APP_ROOT ?>admin_dashboard/dashboard.php?action=add" class="dropdown-item">Add Student</a>
+        <a href="<?= $APP_ROOT ?>admin_dashboard/students.php" class="dropdown-item">All Students</a>
+        <a href="<?= $APP_ROOT ?>admin_dashboard/students.php?action=add" class="dropdown-item">Add Student</a>
       </div>
     </div>
 

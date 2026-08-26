@@ -1,9 +1,10 @@
 <?php
 // ── Database connection ──────────────────────────────────────
-define('DB_HOST', 'localhost');
-define('DB_USER', 'root');       // default XAMPP user
-define('DB_PASS', '');           // default XAMPP password (empty)
-define('DB_NAME', 'sms_db');
+// Reads from environment variables (Docker) or falls back to XAMPP defaults
+define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
+define('DB_USER', getenv('DB_USER') ?: 'root');
+define('DB_PASS', getenv('DB_PASS') ?: '');
+define('DB_NAME', getenv('DB_NAME') ?: 'sms_db');
 
 // Try connecting without selecting a DB first, so we can create it if missing
 $conn = new mysqli(DB_HOST, DB_USER, DB_PASS);

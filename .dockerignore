@@ -1,0 +1,9 @@
+.git
+.gitignore
+.vscode
+README.md
+docker/
+app/.env
+app/requirements/uploads/*
+app/enrollment_tab/uploads/*
+*.log

@@ -1,6 +1,11 @@
 /* ── Dashboard styles ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+button, input, select, textarea {
+  font-family: 'Segoe UI', sans-serif;
+  font-size: inherit;
+}
+
 body {
   font-family: 'Segoe UI', sans-serif;
   background: #e8edf4;
