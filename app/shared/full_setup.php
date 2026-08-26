@@ -9,12 +9,23 @@
 // Disable exceptions — we handle errors manually
 mysqli_report(MYSQLI_REPORT_OFF);
 
-$host = 'localhost';
-$user = 'root';
-$pass = '';
-$db   = 'sms_db';
+// $host = 'localhost';
+// $user = 'root';
+// $pass = '';
+// $db   = 'sms_db';
 
-$conn = new mysqli($host, $user, $pass);
+// $conn = new mysqli($host, $user, $pass);
+// $errors = [];
+// $done   = [];
+
+$host = getenv('DB_HOST');
+$user = getenv('DB_USERNAME');
+$pass = getenv('DB_PASSWORD');
+$db   = getenv('DB_DATABASE');
+$port = (int) (getenv('DB_PORT') ?: 3306);
+
+$conn = new mysqli($host, $user, $pass, $db, $port);
+
 $errors = [];
 $done   = [];
 
