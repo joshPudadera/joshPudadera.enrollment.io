@@ -1,8 +1,16 @@
 <?php
 mysqli_report(MYSQLI_REPORT_OFF); // disable exceptions, handle errors manually
 
-$conn = new mysqli('localhost', 'root', '');
+$conn = new mysqli(
+    getenv('DB_HOST') ?: 'localhost',
+    getenv('DB_USER') ?: 'root',
+    getenv('DB_PASS') ?: '',
+    null,
+    (int)(getenv('DB_PORT') ?: 3306)
+);
 if ($conn->connect_error) die("Cannot connect to MySQL: " . $conn->connect_error . "\n");
+
+$db = getenv('DB_NAME') ?: 'sms_db';
 
 $ok = 0; $fail = 0;
 
@@ -24,8 +32,8 @@ function q($conn, $sql, $label) {
 
 echo "\n=== BCP SMS — Database Setup ===\n\n";
 
-q($conn,"CREATE DATABASE IF NOT EXISTS sms_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci","Create database sms_db");
-q($conn,"USE sms_db","Select database");
+q($conn,"CREATE DATABASE IF NOT EXISTS `$db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci","Create database $db");
+@$conn->select_db($db) or $conn->query("USE `$db`");
 
 // ── users ────────────────────────────────────────────────────
 q($conn,"CREATE TABLE IF NOT EXISTS users (

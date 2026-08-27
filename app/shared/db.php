@@ -6,7 +6,8 @@ define('DB_USER', getenv('DB_USER') ?: 'root');
 define('DB_PASS', getenv('DB_PASS') ?: '');
 define('DB_NAME', getenv('DB_NAME') ?: 'sms_db');
 
-// Try connecting without selecting a DB first, so we can create it if missing
+// Try connecting — on hosted platforms the DB already exists,
+// on local XAMPP we create it if missing.
 $conn = new mysqli(DB_HOST, DB_USER, DB_PASS);
 
 if ($conn->connect_error) {
@@ -32,20 +33,24 @@ if ($conn->connect_error) {
     </div></body></html>');
 }
 
-// Create database if it doesn't exist
-$conn->query("CREATE DATABASE IF NOT EXISTS `" . DB_NAME . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+// Try to create the database (works on local XAMPP with root).
+// On hosted platforms the DB already exists and the user lacks CREATE privilege —
+// suppress the error and just select the existing DB.
+@$conn->query("CREATE DATABASE IF NOT EXISTS `" . DB_NAME . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+
 $conn->select_db(DB_NAME);
 
 if ($conn->errno) {
     die('<p style="color:red;font-family:sans-serif;padding:20px;">
          Could not select database <strong>' . DB_NAME . '</strong>.<br>
+         On hosted platforms, set DB_NAME to the database name provided by your host (e.g. hf_db_xxxxx).<br>
          <a href="../shared/full_setup.php">Click here to run the database setup.</a></p>');
 }
 
 $conn->set_charset('utf8mb4');
 
-// Ensure ref_number column exists on pre_registrations
-$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS ref_number VARCHAR(50) DEFAULT NULL");
+// Ensure ref_number column exists — suppress silently, it's added during setup
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS ref_number VARCHAR(50) DEFAULT NULL");
 
 // ── Helper: check if enrollment tables exist ─────────────────
 function enrollment_tables_exist(mysqli $conn): bool {

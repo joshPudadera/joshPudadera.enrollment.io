@@ -26,7 +26,7 @@ $year    = trim($d['last_year_level'] ?? '1st Year');
 $prev    = trim($d['prev_school']     ?? '');
 
 // Ensure the column allows NULL in case the DB was created before the schema fix
-$conn->query("ALTER TABLE pre_registrations MODIFY COLUMN user_id INT UNSIGNED NULL DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations MODIFY COLUMN user_id INT UNSIGNED NULL DEFAULT NULL");
 
 $uid = $user_id > 0 ? (int)$user_id : null;
 

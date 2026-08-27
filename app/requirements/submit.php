@@ -26,8 +26,8 @@ unset($doc); // break reference
 
 // ── Save to enrollment_documents if tables exist ─────────────
 if (enrollment_tables_exist($conn)) {
-    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
-    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL");
+    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
+    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL");
 
     $pre_reg_id = null;
     if ($user_id) {

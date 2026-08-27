@@ -18,11 +18,11 @@ mysqli_report(MYSQLI_REPORT_OFF);
 // $errors = [];
 // $done   = [];
 
-$host = getenv('DB_HOST');
-$user = getenv('DB_USERNAME');
-$pass = getenv('DB_PASSWORD');
-$db   = getenv('DB_DATABASE');
-$port = (int) (getenv('DB_PORT') ?: 3306);
+$host = getenv('DB_HOST') ?: 'localhost';
+$user = getenv('DB_USER') ?: 'root';
+$pass = getenv('DB_PASS') ?: '';
+$db   = getenv('DB_NAME') ?: 'sms_db';
+$port = (int)(getenv('DB_PORT') ?: 3306);
 
 $conn = new mysqli($host, $user, $pass, $db, $port);
 
@@ -32,8 +32,10 @@ $done   = [];
 if ($conn->connect_error) {
     die('<p style="color:red;font-family:sans-serif;padding:20px;">
          Cannot connect to MySQL: ' . $conn->connect_error . '<br>
-         Make sure XAMPP MySQL is running.</p>');
+         Make sure environment variables DB_HOST, DB_USER, DB_PASS, DB_NAME are set.</p>');
 }
+
+$conn->set_charset('utf8mb4');
 
 // ── Helper ───────────────────────────────────────────────────
 function run(mysqli $conn, string $sql, string $label, array &$done, array &$errors): bool {
@@ -46,15 +48,14 @@ function run(mysqli $conn, string $sql, string $label, array &$done, array &$err
     return false;
 }
 
-// ── 1. Create / select database ──────────────────────────────
-run($conn, "CREATE DATABASE IF NOT EXISTS `$db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
-    'Database <strong>sms_db</strong> ensured', $done, $errors);
+// ── 1. Verify database connection is usable ──────────────────
+// On hosted platforms the DB already exists — no CREATE DATABASE needed.
+// On local XAMPP we try to create it but suppress the error if it exists.
+@$conn->query("CREATE DATABASE IF NOT EXISTS `$db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
 $conn->select_db($db);
-$conn->set_charset('utf8mb4');
+$done[] = 'Database <strong>' . htmlspecialchars($db) . '</strong> ready';
 
 // ── 2. Repair InnoDB if corrupted ────────────────────────────
-// If any table reports errno 1932 ("not exist in engine"), drop ALL tables
-// in FK-safe order and let the CREATE statements rebuild them clean.
 $corrupt = false;
 $probe   = $conn->query("SELECT 1 FROM users LIMIT 1");
 if ($probe === false && $conn->errno === 1932) {
@@ -268,6 +269,20 @@ run($conn, "CREATE TABLE IF NOT EXISTS announcements (
     FOREIGN KEY (posted_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>announcements</strong>', $done, $errors);
+
+// ════════════════════════════════════════════════════════════
+//  COLUMN ADDITIONS (idempotent — safe to re-run)
+// ════════════════════════════════════════════════════════════
+$alters = [
+    "ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS ref_number VARCHAR(50) DEFAULT NULL",
+    "ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL",
+    "ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL",
+    "ALTER TABLE pre_registrations MODIFY COLUMN user_id INT UNSIGNED NULL DEFAULT NULL",
+];
+foreach ($alters as $sql) {
+    @$conn->query($sql); // suppress — columns may already exist
+}
+$done[] = 'Schema columns verified';
 
 // ════════════════════════════════════════════════════════════
 //  SEED DATA

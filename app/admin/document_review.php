@@ -14,9 +14,9 @@ $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'A', 0, 1));
 
 // ── Fetch all documents with applicant info ───────────────────
 $docs = [];
-// Add ai_result column if it doesn't exist yet
-$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
-$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL");
+// Ensure ai columns exist (suppressed — added during setup, safe to skip if already present)
+@$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
+@$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL");
 
 $res  = $conn->query(
     "SELECT d.*,
