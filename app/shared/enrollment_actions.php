@@ -27,17 +27,35 @@ switch ($action) {
 
 // ── PRE-REGISTRATION ─────────────────────────────────────────
 case 'pre_register': {
-    $first_name  = trim($_POST['first_name']  ?? '');
-    $last_name   = trim($_POST['last_name']   ?? '');
-    $email       = trim($_POST['email']       ?? '');
-    $phone       = trim($_POST['phone']       ?? '');
-    $birthday    = trim($_POST['birthday']    ?? '');
-    $course      = trim($_POST['course']      ?? '');
-    $year_level  = trim($_POST['year_level']  ?? '');
-    $prev_school = trim($_POST['prev_school'] ?? '');
+    $first_name     = trim($_POST['first_name']          ?? '');
+    $last_name      = trim($_POST['last_name']           ?? '');
+    $email          = trim($_POST['email']               ?? '');
+    $phone          = trim($_POST['phone']               ?? '');
+    $birthday       = trim($_POST['birthday']            ?? '');
+    $course         = trim($_POST['course']              ?? '');
+    $year_level     = trim($_POST['year_level']          ?? '');
+    $prev_school    = trim($_POST['prev_school']         ?? '');
+    $applicant_type = trim($_POST['applicant_type']      ?? '');
+    $transfer_yr    = trim($_POST['transfer_year_level'] ?? '');
 
-    if (!$first_name||!$last_name||!$email||!$phone||!$birthday||!$course||!$year_level)
+    // Validate applicant_type
+    $valid_types = ['Freshman', 'Senior High', 'Octoberian', 'Transferee'];
+    if (!$applicant_type || !in_array($applicant_type, $valid_types))
+        respond(false, 'Please select an applicant type.');
+
+    if (!$first_name||!$last_name||!$email||!$phone||!$birthday||!$course)
         respond(false, 'All required fields must be filled.');
+
+    // For transferees, transfer_year_level is required
+    if ($applicant_type === 'Transferee' && !$transfer_yr)
+        respond(false, 'Please specify the year level you are transferring into.');
+
+    // For Freshman, lock year_level to 1st Year
+    if ($applicant_type === 'Freshman') $year_level = '1st Year';
+
+    // Ensure new columns exist (safe no-op)
+    @$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS applicant_type ENUM('Freshman','Senior High','Octoberian','Transferee') DEFAULT NULL");
+    @$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS transfer_year_level VARCHAR(50) DEFAULT NULL");
 
     // Check for existing pending application
     $chk = $conn->prepare('SELECT id FROM pre_registrations WHERE user_id=? AND status IN ("Pending","Approved") LIMIT 1');
@@ -46,10 +64,15 @@ case 'pre_register': {
     $chk->close();
 
     $stmt = $conn->prepare(
-        'INSERT INTO pre_registrations (user_id,first_name,last_name,email,phone,birthday,course,year_level,prev_school)
-         VALUES (?,?,?,?,?,?,?,?,?)'
+        'INSERT INTO pre_registrations
+            (user_id, first_name, last_name, email, phone, birthday, course, year_level,
+             prev_school, applicant_type, transfer_year_level)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)'
     );
-    $stmt->bind_param('issssssss', $user_id,$first_name,$last_name,$email,$phone,$birthday,$course,$year_level,$prev_school);
+    $stmt->bind_param('issssssssss',
+        $user_id, $first_name, $last_name, $email, $phone, $birthday,
+        $course, $year_level, $prev_school, $applicant_type, $transfer_yr
+    );
     if ($stmt->execute()) respond(true, 'Pre-registration submitted successfully.', ['id' => $conn->insert_id]);
     respond(false, 'Submission failed: ' . $conn->error);
 }
@@ -298,7 +321,23 @@ case 'validate_application': {
 
     $protocol  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
     $host      = $_SERVER['HTTP_HOST'] ?? 'localhost';
-    $login_url = "$protocol://$host/sms/app/auth/login_via_token.php?token=$token";
+    // Prefer APP_URL from .env; fall back to deriving from SCRIPT_NAME
+    $_app_url  = '';
+    $_env_file = __DIR__ . '/../.env';
+    if (file_exists($_env_file)) {
+        foreach (file($_env_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $_line) {
+            $_line = trim($_line);
+            if ($_line === '' || $_line[0] === '#') continue;
+            if (str_starts_with($_line, 'APP_URL=')) { $_app_url = trim(substr($_line, 8)); break; }
+        }
+    }
+    if (!$_app_url) {
+        $script_dir = dirname($_SERVER['SCRIPT_NAME'] ?? '/shared/enrollment_actions.php');
+        $app_root   = dirname($script_dir);
+        $app_root   = ($app_root === '/' || $app_root === '\\') ? '' : $app_root;
+        $_app_url   = "$protocol://$host{$app_root}";
+    }
+    $login_url  = rtrim($_app_url, '/') . '/auth/login_via_token.php?token=' . $token;
 
     // Send email (silently fails if SMTP not configured)
     $sc   = preg_replace('/Bachelor of Science in /i', 'BS ', $course);
@@ -311,19 +350,47 @@ case 'validate_application': {
     );
     @send_email($email, 'Your BCP Student Portal Account', $body);
 
+    // ── Insert into students table (source of truth for the All Students page) ──
+    // Only insert if not already present for this pre_registration.
+    $dup_chk = $conn->prepare("SELECT id FROM students WHERE pre_reg_id = ? LIMIT 1");
+    $dup_chk->bind_param('i', $pre_reg_id);
+    $dup_chk->execute();
+    $already_in_students = $dup_chk->get_result()->num_rows > 0;
+    $dup_chk->close();
+
+    if (!$already_in_students) {
+        // Pull the fields we have from pre_registrations;
+        // section defaults to 'TBA' until section assignment runs.
+        $phone    = $applicant['phone']      ?? '';
+        $birthday = $applicant['birthday']   ?? '2000-01-01';
+        $yr_lvl   = $applicant['year_level'] ?? '';
+
+        $s_ins = $conn->prepare(
+            "INSERT INTO students
+                (pre_reg_id, first_name, last_name, birthday, course, year_level, section, phone, status)
+             VALUES (?, ?, ?, ?, ?, ?, 'TBA', ?, 'Active')"
+        );
+        $s_ins->bind_param('issssss',
+            $pre_reg_id, $first, $last, $birthday, $course, $yr_lvl, $phone
+        );
+        $s_ins->execute();
+        $s_ins->close();
+    }
+
     respond(true, 'Application Approved.', [
         'login_url'    => $login_url,
         'username'     => $username,
         'student_name' => "$first $last",
     ]);
 }
-
-// ── GENERATE ID NUMBER (admin) ────────────────────────────────
 case 'generate_id': {
     if (!$is_admin) respond(false, 'Unauthorized.');
     $pre_reg_id = (int)($_POST['pre_reg_id'] ?? 0);
     $course     = trim($_POST['course']      ?? '');
     $year_level = trim($_POST['year_level']  ?? '');
+
+    // Ensure grade_confirmed column exists (added in pipeline gate update)
+    @$conn->query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS grade_confirmed TINYINT(1) NOT NULL DEFAULT 0");
 
     // Check not already enrolled
     $chk = $conn->prepare('SELECT id FROM enrollments WHERE pre_reg_id=? LIMIT 1');
@@ -342,13 +409,36 @@ case 'generate_id': {
     );
     $stmt->bind_param('isssi', $pre_reg_id, $id_num, $course, $year_level, $user_id);
     if ($stmt->execute()) {
+        $enrollment_id = (int)$conn->insert_id;
         $stmt->close();
+
         // Update pre_registration status to Enrolled
         $enrolled_status = 'Enrolled';
         $upd = $conn->prepare('UPDATE pre_registrations SET status=? WHERE id=?');
         $upd->bind_param('si', $enrolled_status, $pre_reg_id);
         $upd->execute();
         $upd->close();
+
+        // ── Auto-insert into waiting list ──────────────────────────────
+        // Every newly enrolled student starts in the waiting queue
+        // (section is NULL). They advance to section assignment only
+        // after grade level is confirmed (grade_confirmed = 1).
+        $pos_res = $conn->query(
+            "SELECT COUNT(*)+1 AS n FROM waiting_list
+             WHERE course='" . $conn->real_escape_string($course) . "'
+               AND year_level='" . $conn->real_escape_string($year_level) . "'
+               AND status='Waiting'"
+        );
+        $queue_pos = $pos_res ? (int)$pos_res->fetch_assoc()['n'] : 1;
+
+        $wl = $conn->prepare(
+            'INSERT IGNORE INTO waiting_list (pre_reg_id, course, year_level, queue_position, reason, status)
+             VALUES (?, ?, ?, ?, \'Awaiting grade level confirmation\', \'Waiting\')'
+        );
+        $wl->bind_param('issi', $pre_reg_id, $course, $year_level, $queue_pos);
+        $wl->execute();
+        $wl->close();
+
         respond(true, 'ID generated.', ['id_number' => $id_num]);
     }
     $stmt->close();
@@ -361,28 +451,72 @@ case 'assign_section': {
     $enrollment_id = (int)($_POST['enrollment_id'] ?? 0);
     $section_code  = trim($_POST['section_code']   ?? '');
 
-    // Get section id and check capacity
-    $sec = $conn->query("SELECT * FROM sections WHERE section_code='".
-           $conn->real_escape_string($section_code)."' LIMIT 1")->fetch_assoc();
+    // Gate: grade must be confirmed before section can be assigned
+    $gate = $conn->prepare('SELECT grade_confirmed, pre_reg_id, course, year_level FROM enrollments WHERE id=? LIMIT 1');
+    $gate->bind_param('i', $enrollment_id);
+    $gate->execute();
+    $enr_row = $gate->get_result()->fetch_assoc();
+    $gate->close();
+    if (!$enr_row) respond(false, 'Enrollment record not found.');
+    if (!$enr_row['grade_confirmed']) respond(false, 'Grade level must be confirmed before assigning a section.');
+
+    // Get section and check capacity
+    $sec = $conn->query(
+        "SELECT * FROM sections WHERE section_code='" .
+        $conn->real_escape_string($section_code) . "' LIMIT 1"
+    )->fetch_assoc();
     if (!$sec) respond(false, 'Section not found.');
-    if ($sec['current_count'] >= $sec['max_capacity']) {
-        // Add to waiting list
-        $enr = $conn->query("SELECT pre_reg_id,course,year_level FROM enrollments WHERE id=$enrollment_id")->fetch_assoc();
-        $pos = (int)$conn->query("SELECT COUNT(*)+1 AS n FROM waiting_list WHERE course='".$conn->real_escape_string($enr['course'])."'")->fetch_assoc()['n'];
-        $stmt = $conn->prepare('INSERT INTO waiting_list (pre_reg_id,course,year_level,queue_position) VALUES (?,?,?,?)');
-        $stmt->bind_param('issi', $enr['pre_reg_id'], $enr['course'], $enr['year_level'], $pos);
-        $stmt->execute();
-        respond(false, 'Section is full. Added to waiting list at position ' . $pos . '.');
+
+    // Count real students in this section
+    $actual = (int)$conn->query(
+        "SELECT COUNT(*) c FROM enrollments WHERE section='" .
+        $conn->real_escape_string($section_code) . "'"
+    )->fetch_assoc()['c'];
+
+    if ($actual >= $sec['max_capacity']) {
+        // Section full — update waiting list reason
+        $upd_wl = $conn->prepare(
+            "UPDATE waiting_list SET reason='Section full — waiting for slot'
+             WHERE pre_reg_id=? AND status='Waiting'"
+        );
+        $upd_wl->bind_param('i', $enr_row['pre_reg_id']);
+        $upd_wl->execute();
+        $upd_wl->close();
+        respond(false, 'Section is full. Student remains in waiting list.');
     }
 
+    // Assign the section
     $stmt = $conn->prepare('UPDATE enrollments SET section=? WHERE id=?');
     $stmt->bind_param('si', $section_code, $enrollment_id);
-    if ($stmt->execute()) {
-        $conn->query("UPDATE sections SET current_count=current_count+1 WHERE section_code='".
-                     $conn->real_escape_string($section_code)."'");
-        respond(true, "Section $section_code assigned.");
-    }
-    respond(false, $conn->error);
+    if (!$stmt->execute()) respond(false, $conn->error);
+    $stmt->close();
+
+    // Sync current_count
+    $conn->query(
+        "UPDATE sections SET current_count=(
+            SELECT COUNT(*) FROM enrollments WHERE section='" .
+            $conn->real_escape_string($section_code) . "'
+        ) WHERE section_code='" . $conn->real_escape_string($section_code) . "'"
+    );
+
+    // Mark student as Promoted in waiting list (section assigned = done)
+    $promoted = 'Promoted';
+    $upd_wl = $conn->prepare(
+        "UPDATE waiting_list SET status=? WHERE pre_reg_id=? AND status='Waiting'"
+    );
+    $upd_wl->bind_param('si', $promoted, $enr_row['pre_reg_id']);
+    $upd_wl->execute();
+    $upd_wl->close();
+
+    // Sync students.section so the All Students page stays up to date
+    $sync = $conn->prepare(
+        'UPDATE students SET section=? WHERE pre_reg_id=?'
+    );
+    $sync->bind_param('si', $section_code, $enr_row['pre_reg_id']);
+    $sync->execute();
+    $sync->close();
+
+    respond(true, "Section $section_code assigned.");
 }
 
 // ── ASSIGN GRADE LEVEL (admin) ────────────────────────────────
@@ -390,10 +524,35 @@ case 'assign_grade': {
     if (!$is_admin) respond(false, 'Unauthorized.');
     $enrollment_id = (int)($_POST['enrollment_id'] ?? 0);
     $year_level    = trim($_POST['year_level']      ?? '');
-    $stmt = $conn->prepare('UPDATE enrollments SET year_level=? WHERE id=?');
+    if (!$year_level) respond(false, 'Year level is required.');
+
+    // Confirm grade level and mark step as done
+    $stmt = $conn->prepare(
+        'UPDATE enrollments SET year_level=?, grade_confirmed=1 WHERE id=?'
+    );
     $stmt->bind_param('si', $year_level, $enrollment_id);
-    if ($stmt->execute()) respond(true, 'Grade level updated.');
-    respond(false, $conn->error);
+    if (!$stmt->execute()) respond(false, $conn->error);
+    $stmt->close();
+
+    // Update waiting list reason to reflect readiness for cross/section check
+    $enr = $conn->prepare('SELECT pre_reg_id, course FROM enrollments WHERE id=? LIMIT 1');
+    $enr->bind_param('i', $enrollment_id);
+    $enr->execute();
+    $enr_row = $enr->get_result()->fetch_assoc();
+    $enr->close();
+
+    if ($enr_row) {
+        $new_reason = 'Awaiting section assignment';
+        $upd_wl = $conn->prepare(
+            'UPDATE waiting_list SET year_level=?, reason=?
+             WHERE pre_reg_id=? AND status=\'Waiting\''
+        );
+        $upd_wl->bind_param('ssi', $year_level, $new_reason, $enr_row['pre_reg_id']);
+        $upd_wl->execute();
+        $upd_wl->close();
+    }
+
+    respond(true, 'Grade level confirmed.');
 }
 
 // ── CROSS ENROLLMENT ─────────────────────────────────────────
@@ -405,6 +564,122 @@ case 'cross_enroll': {
     $stmt->bind_param('si', $cross_from, $enrollment_id);
     if ($stmt->execute()) respond(true, 'Marked as cross-enrolled.');
     respond(false, $conn->error);
+}
+
+// ── PROMOTE FROM WAITING LIST (admin) ────────────────────────
+case 'promote_waiting': {
+    if (!$is_admin) respond(false, 'Unauthorized.');
+    $waiting_id    = (int)($_POST['waiting_id']    ?? 0);
+    $section_code  = trim($_POST['section_code']   ?? '');
+    if (!$waiting_id || !$section_code) respond(false, 'Missing parameters.');
+
+    // Get waiting entry
+    $wl = $conn->prepare('SELECT * FROM waiting_list WHERE id=? AND status=\'Waiting\' LIMIT 1');
+    $wl->bind_param('i', $waiting_id);
+    $wl->execute();
+    $wl_row = $wl->get_result()->fetch_assoc();
+    $wl->close();
+    if (!$wl_row) respond(false, 'Waiting entry not found or already processed.');
+
+    // Get enrollment for this pre_reg_id
+    $enr = $conn->prepare('SELECT id, grade_confirmed FROM enrollments WHERE pre_reg_id=? LIMIT 1');
+    $enr->bind_param('i', $wl_row['pre_reg_id']);
+    $enr->execute();
+    $enr_row = $enr->get_result()->fetch_assoc();
+    $enr->close();
+    if (!$enr_row) respond(false, 'Enrollment record not found.');
+    if (!$enr_row['grade_confirmed']) respond(false, 'Grade level must be confirmed first.');
+
+    // Check section capacity
+    $sec = $conn->query(
+        "SELECT * FROM sections WHERE section_code='" .
+        $conn->real_escape_string($section_code) . "' LIMIT 1"
+    )->fetch_assoc();
+    if (!$sec) respond(false, 'Section not found.');
+    $actual = (int)$conn->query(
+        "SELECT COUNT(*) c FROM enrollments WHERE section='" .
+        $conn->real_escape_string($section_code) . "'"
+    )->fetch_assoc()['c'];
+    if ($actual >= $sec['max_capacity']) respond(false, 'Section is still full.');
+
+    // Assign section in enrollments
+    $upd = $conn->prepare('UPDATE enrollments SET section=? WHERE id=?');
+    $upd->bind_param('si', $section_code, $enr_row['id']);
+    $upd->execute();
+    $upd->close();
+
+    // Sync sections.current_count
+    $conn->query(
+        "UPDATE sections SET current_count=(
+            SELECT COUNT(*) FROM enrollments WHERE section='" .
+            $conn->real_escape_string($section_code) . "'
+         ) WHERE section_code='" . $conn->real_escape_string($section_code) . "'"
+    );
+
+    // Mark waiting entry as Promoted
+    $conn->prepare("UPDATE waiting_list SET status='Promoted' WHERE id=?")->execute()
+        || respond(false, $conn->error);
+    $pst = $conn->prepare("UPDATE waiting_list SET status='Promoted' WHERE id=?");
+    $pst->bind_param('i', $waiting_id);
+    $pst->execute();
+    $pst->close();
+
+    // Re-number remaining queue for this course/year
+    $remaining = [];
+    $rq = $conn->query(
+        "SELECT id FROM waiting_list
+         WHERE course='" . $conn->real_escape_string($wl_row['course']) . "'
+           AND year_level='" . $conn->real_escape_string($wl_row['year_level']) . "'
+           AND status='Waiting'
+         ORDER BY queue_position ASC"
+    );
+    if ($rq) while ($r = $rq->fetch_assoc()) $remaining[] = $r['id'];
+    foreach ($remaining as $pos => $rid) {
+        $conn->query("UPDATE waiting_list SET queue_position=" . ($pos + 1) . " WHERE id=$rid");
+    }
+
+    // Sync students.section
+    $sync = $conn->prepare('UPDATE students SET section=? WHERE pre_reg_id=?');
+    $sync->bind_param('si', $section_code, $wl_row['pre_reg_id']);
+    $sync->execute();
+    $sync->close();
+
+    respond(true, "Student promoted and assigned to section $section_code.");
+}
+
+// ── CANCEL WAITING LIST ENTRY (admin) ─────────────────────────
+case 'cancel_waiting': {
+    if (!$is_admin) respond(false, 'Unauthorized.');
+    $waiting_id = (int)($_POST['waiting_id'] ?? 0);
+    if (!$waiting_id) respond(false, 'Missing waiting_id.');
+
+    $wl = $conn->prepare('SELECT course, year_level FROM waiting_list WHERE id=? LIMIT 1');
+    $wl->bind_param('i', $waiting_id);
+    $wl->execute();
+    $wl_row = $wl->get_result()->fetch_assoc();
+    $wl->close();
+    if (!$wl_row) respond(false, 'Entry not found.');
+
+    $upd = $conn->prepare("UPDATE waiting_list SET status='Cancelled' WHERE id=?");
+    $upd->bind_param('i', $waiting_id);
+    $upd->execute();
+    $upd->close();
+
+    // Re-number remaining queue
+    $remaining = [];
+    $rq = $conn->query(
+        "SELECT id FROM waiting_list
+         WHERE course='" . $conn->real_escape_string($wl_row['course']) . "'
+           AND year_level='" . $conn->real_escape_string($wl_row['year_level']) . "'
+           AND status='Waiting'
+         ORDER BY queue_position ASC"
+    );
+    if ($rq) while ($r = $rq->fetch_assoc()) $remaining[] = $r['id'];
+    foreach ($remaining as $pos => $rid) {
+        $conn->query("UPDATE waiting_list SET queue_position=" . ($pos + 1) . " WHERE id=$rid");
+    }
+
+    respond(true, 'Waiting list entry cancelled.');
 }
 
 // ── LIST PRE-REGS (admin) ─────────────────────────────────────

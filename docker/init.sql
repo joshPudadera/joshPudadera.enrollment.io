@@ -1,7 +1,5 @@
--- ============================================================
+
 --  BCP SMS — Initial Database Schema
---  Auto-runs when MySQL container first starts.
--- ============================================================
 
 CREATE DATABASE IF NOT EXISTS sms_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE sms_db;

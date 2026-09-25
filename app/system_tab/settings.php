@@ -55,7 +55,7 @@ ob_start();
   <div class="form-grid">
     <div class="form-field full">
       <label>Database</label>
-      <input type="text" value="sms_db @ localhost" readonly/>
+      <input type="text" value="sms_db @ enrollment.bcpsms2.com" readonly/>
     </div>
     <div class="form-field">
       <label>PHP Version</label>

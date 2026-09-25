@@ -4,7 +4,7 @@ $ref = $_SESSION['enroll_ref'] ?? null;
 if (!$ref) { header('Location: index.php'); exit; }
 unset($_SESSION['enroll_ref']);
 
-$current_step = 6;
+$current_step = 7;
 include __DIR__ . '/header.php';
 $logged_in = !empty($_SESSION['user_id']);
 ?>

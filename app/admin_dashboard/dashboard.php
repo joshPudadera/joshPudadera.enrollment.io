@@ -160,7 +160,7 @@ if ($r && $r->num_rows > 0) {
         <div class="card-label"><i class="fa-solid fa-id-badge" style="color:#2563eb;"></i> Enrolled Students</div>
         <div class="card-amount" style="color:#2563eb;"><?= $enrolled_count ?></div>
         <div class="card-detail"><?= $approved_enr ?> approved</div>
-        <a href="../enrollment_tab/enrollment_dashboard.php" class="card-btn" style="margin-top:8px;">
+        <a href="../enrollment_tab/validation.php" class="card-btn" style="margin-top:8px;">
           <i class="fa-solid fa-arrow-right"></i> Manage
         </a>
       </div>
@@ -175,8 +175,90 @@ if ($r && $r->num_rows > 0) {
       </div>
     </div>
 
-    <!-- Students by Course chart -->
-    <div class="chart-card">
+    <!-- Enrollment progress steps + extra stat row -->
+    <?php
+    $total_prereg_all  = $pending_enr + $approved_enr + $enrolled_count;
+    $r = $conn->query("SHOW TABLES LIKE 'pre_registrations'");
+    $has_prereg = $r && $r->num_rows > 0;
+    $r = $conn->query("SHOW TABLES LIKE 'sections'");
+    $total_sections_db = 0;
+    if ($r && $r->num_rows > 0) {
+        $r2 = $conn->query("SELECT COUNT(*) c FROM sections WHERE is_active=1");
+        if ($r2) $total_sections_db = (int)$r2->fetch_assoc()['c'];
+    }
+    ?>
+    <div style="background:#fff;border-radius:12px;padding:16px 20px;margin:0 24px 20px;
+                box-shadow:0 1px 6px rgba(0,0,0,.07);">
+      <div style="font-size:.78rem;font-weight:700;color:#1a3a8c;margin-bottom:14px;">
+        <i class="fa-solid fa-graduation-cap"></i> Enrollment Pipeline
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:0;overflow-x:auto;">
+        <?php
+        $steps = [
+          ['fa-file-pen',        'Pre-Registration', $total_prereg_all > 0],
+          ['fa-upload',          'Documents',        false],
+          ['fa-clipboard-check', 'Validation',       $approved_enr > 0],
+          ['fa-id-badge',        'ID Generated',     $enrolled_count > 0],
+          ['fa-layer-group',     'Grade Level',      $enrolled_count > 0],
+          ['fa-chalkboard',      'Section Assigned', $total_sections_db > 0],
+        ];
+        $first_active = true;
+        foreach ($steps as $i => [$icon, $label, $is_done]):
+          $color  = $is_done ? '#16a34a' : ($first_active ? '#2563eb' : '#cbd5e1');
+          $bg     = $is_done ? '#dcfce7' : ($first_active ? '#eff6ff' : '#f8fafc');
+          $border = $is_done ? '#86efac' : ($first_active ? '#bfdbfe' : '#e2e8f0');
+          if (!$is_done && $first_active) $first_active = false;
+          $is_last = $i === count($steps) - 1;
+        ?>
+        <div style="display:flex;align-items:center;flex-shrink:0;">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px;min-width:90px;">
+            <div style="width:40px;height:40px;border-radius:50%;background:<?= $bg ?>;
+                        border:2px solid <?= $border ?>;display:flex;align-items:center;
+                        justify-content:center;font-size:.9rem;color:<?= $color ?>;">
+              <i class="fa-solid <?= $icon ?>"></i>
+            </div>
+            <span style="font-size:.68rem;font-weight:600;color:<?= $color ?>;text-align:center;line-height:1.3;">
+              <?= $label ?>
+            </span>
+          </div>
+          <?php if (!$is_last): ?>
+          <div style="width:32px;height:2px;background:<?= $is_done ? '#86efac' : '#e2e8f0' ?>;
+                      margin-bottom:20px;flex-shrink:0;"></div>
+          <?php endif; ?>
+        </div>
+        <?php endforeach; ?>
+      </div>
+    </div>
+
+    <!-- Extra enrollment stat cards -->
+    <div class="info-row">
+      <div class="info-card">
+        <div class="card-label"><i class="fa-solid fa-file-pen" style="color:#2563eb;"></i> Total Applications</div>
+        <div class="card-amount"><?= $total_prereg_all ?></div>
+        <div class="card-detail">All pre-registrations</div>
+        <a href="../enrollment_tab/pre_registration.php" class="card-btn" style="margin-top:8px;">
+          <i class="fa-solid fa-arrow-right"></i> View
+        </a>
+      </div>
+      <div class="info-card">
+        <div class="card-label"><i class="fa-solid fa-circle-check" style="color:#16a34a;"></i> Approved</div>
+        <div class="card-amount" style="color:#16a34a;"><?= $approved_enr ?></div>
+        <div class="card-detail">Ready for enrollment</div>
+        <a href="../enrollment_tab/validation.php" class="card-btn" style="margin-top:8px;">
+          <i class="fa-solid fa-arrow-right"></i> View
+        </a>
+      </div>
+      <div class="info-card">
+        <div class="card-label"><i class="fa-solid fa-chalkboard" style="color:#7c3aed;"></i> Active Sections</div>
+        <div class="card-amount" style="color:#7c3aed;"><?= $total_sections_db ?></div>
+        <div class="card-detail">Available sections</div>
+        <a href="../enrollment_tab/section_assignment.php" class="card-btn" style="margin-top:8px;">
+          <i class="fa-solid fa-arrow-right"></i> View
+        </a>
+      </div>
+    </div>
+
+    <!-- Students by Course chart -->    <div class="chart-card">
       <div class="chart-header">
         <div><h3>Students by Course</h3><div class="chart-sub">Active vs Inactive</div></div>
         <a href="../reports_tab/reports.php" class="card-btn">

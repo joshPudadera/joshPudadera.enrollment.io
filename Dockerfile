@@ -38,7 +38,7 @@ RUN chown -R www-data:www-data /var/www/html \
     && chmod -R 777 /var/www/html/enrollment_tab/uploads
 
 # Apache's default port.
-# HostForge will provide the actual runtime PORT.
+
 EXPOSE 80
 
 # Startup script

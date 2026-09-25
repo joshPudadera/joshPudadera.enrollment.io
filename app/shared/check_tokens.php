@@ -17,7 +17,7 @@ while ($r = $res->fetch_assoc()) {
     echo "  User:    [{$r['uid']}] {$r['username']} <{$r['email']}> role={$r['role']}\n";
     echo "  Used:    {$r['used']}\n";
     echo "  Expires: {$r['expires_at']}\n";
-    echo "  Link:    http://localhost/sms/app/auth/login_via_token.php?token={$r['token']}\n\n";
+    echo "  Link:    https://enrollment.bcpsms2.com/auth/login_via_token.php?token={$r['token']}\n\n";
 }
 echo '</pre>';
 $conn->close();

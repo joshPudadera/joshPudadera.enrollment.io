@@ -61,7 +61,7 @@ include __DIR__ . '/header.php';
     </div>
 
     <div class="enroll-actions">
-      <a href="branch.php" class="btn-proceed">
+      <a href="applicant_type.php" class="btn-proceed">
         Proceed to Application <i class="fa-solid fa-arrow-right"></i>
       </a>
     </div>

@@ -46,11 +46,26 @@ switch ($action) {
     case 'get':
         $id = (int)($_GET['id'] ?? 0);
         if ($id <= 0) { echo json_encode(['success' => false, 'message' => 'Invalid ID.']); break; }
-        $result  = $conn->query("SELECT * FROM students WHERE id = $id LIMIT 1");
-        $student = $result->fetch_assoc();
-        echo $student
-            ? json_encode(['success' => true, 'student' => $student])
-            : json_encode(['success' => false, 'message' => 'Student not found.']);
+        $result = $conn->query(
+            "SELECT s.*,
+                    p.ref_number, p.status AS app_status,
+                    e.id_number, e.year_level AS enr_year_level,
+                    e.section AS enr_section, e.grade_confirmed,
+                    e.is_cross, e.enrolled_at
+             FROM students s
+             LEFT JOIN pre_registrations p ON s.pre_reg_id = p.id
+             LEFT JOIN enrollments e ON e.pre_reg_id = s.pre_reg_id
+             WHERE s.id = $id LIMIT 1"
+        );
+        $student = $result ? $result->fetch_assoc() : null;
+        if ($student) {
+            // Overlay live enrollment values
+            $student['year_level'] = $student['enr_year_level'] ?: $student['year_level'];
+            $student['section']    = $student['enr_section']    ?: $student['section'];
+            echo json_encode(['success' => true, 'student' => $student]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Student not found.']);
+        }
         break;
 
     case 'edit':

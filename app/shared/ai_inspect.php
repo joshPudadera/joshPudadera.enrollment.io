@@ -67,18 +67,105 @@ function ai_inspect_document(string $abs_path, string $doc_type): array {
     // ── 4. Build the prompt ──────────────────────────────────
     $doc_label = match ($doc_type) {
         'BirthCertificate' => 'Philippine PSA (formerly NSO) Birth Certificate',
+        'ReportCard'       => 'Philippine high school Form 138 (Report Card)',
+        'GoodMoral'        => 'Certificate of Good Moral Character issued by a Philippine school',
         'Form137'          => 'Philippine high school Form 137',
-        'Form138'          => 'Philippine high school Form 138 (Report Card)',
-        'GoodMoral'        => 'Certificate of Good Moral Character',
         'IDPhoto'          => 'ID photo',
         'Diploma'          => 'school diploma',
         default            => 'official document',
+    };
+
+    // ── Per-document-type extraction fields and authenticity checks ──
+    $type_instructions = match ($doc_type) {
+
+        'BirthCertificate' => <<<'INST'
+This is a PSA Birth Certificate. Check for:
+1. PSA security paper (light blue/green security paper with PSA watermark)
+2. Official PSA seal/stamp and barcode
+3. Registry number in the upper right corner
+4. Consistent fonts — PSA certificates use a standard typeface; mixed fonts are a red flag
+5. Presence of the civil registrar's signature and dry seal
+6. "Republic of the Philippines" and PSA header text
+7. No signs of digital alteration (blurred edges, pixel anomalies, misaligned text)
+
+Extract these fields:
+- full_name (Last Name, First Name, Middle Name combined)
+- last_name, first_name, middle_name (from "Name of Child" section)
+- date_of_birth (from "Date of Birth")
+- place_of_birth (city/municipality and province)
+- sex (Male or Female)
+- nationality (usually "Filipino")
+- registration_number (Registry No. upper right)
+- date_issued (if printed on the cert)
+- issuing_authority ("Philippine Statistics Authority" or local civil registrar)
+- name_of_mother (mother's full maiden name)
+- name_of_father (father's full name)
+INST,
+
+        'ReportCard' => <<<'INST'
+This is a Philippine high school Form 138 (Report Card). Check for:
+1. DepEd letterhead or school header with school name, address, and school ID
+2. Student's name and LRN (Learner Reference Number) at the top
+3. Grade levels and subject grades in the standard DepEd format
+4. School year and grading period labels
+5. Teacher/adviser and principal signatures with printed names and positions
+6. School dry seal or stamp
+7. No signs of grade tampering (erased numbers, inconsistent ink, misaligned cells)
+
+Extract these fields:
+- full_name (student's full name as printed)
+- last_name, first_name, middle_name
+- date_of_birth (if present)
+- lrn (Learner Reference Number)
+- school_name (name of the school)
+- school_year (e.g. "2024-2025")
+- grade_level (e.g. "Grade 12")
+- strand_or_track (e.g. "STEM", "ABM", "TVL")
+- general_average (final general average if visible)
+- class_adviser (adviser's name)
+- principal (school principal's name)
+- date_issued (date the card was issued, if printed)
+- issuing_authority (school name + principal)
+INST,
+
+        'GoodMoral' => <<<'INST'
+This is a Certificate of Good Moral Character issued by a Philippine school or barangay. Check for:
+1. School/institution letterhead with name and address
+2. Recipient's full name clearly stated in the body text
+3. Purpose statement (e.g. "for enrollment purposes", "for college admission")
+4. Signatory's name, position/designation, and signature
+5. Official dry seal or stamp of the school/institution
+6. Date of issuance
+7. No signs of digital editing (font inconsistencies, pixelation around text)
+
+Extract these fields:
+- full_name (name of the person the certificate is issued for)
+- last_name, first_name, middle_name (if separable)
+- issuing_school (name of school/institution issuing the cert)
+- issuing_authority (name + position of the signatory, e.g. "Juan dela Cruz, Principal")
+- date_issued (YYYY-MM-DD or as written)
+- purpose (stated reason for issuance)
+- year_graduated (if mentioned, e.g. "SY 2024-2025")
+INST,
+
+        default => <<<'INST'
+Analyze the document for general authenticity indicators:
+1. Official letterhead, seals, or stamps
+2. Consistent fonts and formatting
+3. Presence of authorized signatures
+4. No visible signs of digital alteration
+
+Extract: full_name, last_name, first_name, middle_name, date_of_birth,
+registration_number, date_issued, issuing_authority.
+INST,
     };
 
     $prompt = <<<PROMPT
 You are a document verification AI for a Philippine college enrollment system.
 
 Analyze this uploaded image of a {$doc_label}.
+
+{$type_instructions}
 
 Return ONLY a valid JSON object (no markdown, no explanation) with these exact keys:
 
@@ -97,20 +184,27 @@ Return ONLY a valid JSON object (no markdown, no explanation) with these exact k
     "place_of_birth": "<city/municipality, province or null>",
     "sex": "<Male | Female | null>",
     "nationality": "<nationality or null>",
-    "registration_number": "<PSA/document registration number or null>",
+    "registration_number": "<document registration/reference number or null>",
     "date_issued": "<YYYY-MM-DD or null>",
-    "issuing_authority": "<issuing office or null>",
+    "issuing_authority": "<issuing office or signatory or null>",
+    "name_of_mother": "<mother's name — Birth Certificate only — or null>",
+    "name_of_father": "<father's name — Birth Certificate only — or null>",
+    "lrn": "<Learner Reference Number — Report Card only — or null>",
+    "school_name": "<school name — Report Card / Good Moral only — or null>",
+    "school_year": "<school year — Report Card only — or null>",
+    "grade_level": "<grade level — Report Card only — or null>",
+    "strand_or_track": "<strand/track — Report Card only — or null>",
+    "general_average": "<final average — Report Card only — or null>",
+    "class_adviser": "<adviser name — Report Card only — or null>",
+    "principal": "<principal name — Report Card / Good Moral only — or null>",
+    "purpose": "<stated purpose — Good Moral only — or null>",
+    "year_graduated": "<graduation year — Good Moral only — or null>",
     "other_details": "<any other notable information or null>"
   }
 }
 
-Focus on:
-1. PSA security features (watermarks, security paper, seals) if Birth Certificate
-2. Consistency of fonts, alignment, and formatting
-3. Whether the document looks digitally altered
-4. Legibility and completeness of required fields
-
-If the image is unclear or not a document, set is_authentic to "uncertain" and explain in authenticity_notes.
+If the image is unclear, blurry, or does not appear to be the expected document type,
+set is_authentic to "uncertain" and explain in authenticity_notes.
 PROMPT;
 
     // ── 5. Call OpenAI API ───────────────────────────────────
@@ -182,5 +276,6 @@ PROMPT;
         'extracted'    => $parsed['extracted_data']         ?? [],
         'inspected_at' => date('Y-m-d H:i:s'),
         'model'        => 'gpt-4o',
+        'doc_type'     => $doc_type,
     ];
 }

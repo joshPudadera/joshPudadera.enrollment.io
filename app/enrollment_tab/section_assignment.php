@@ -11,12 +11,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'auto_
     $assigned = 0;
     $created  = 0;
 
-    // Get all unassigned enrolled students
+    // Get all unassigned enrolled students — grade_confirmed=1 only
     $unassigned_q = $conn->query(
-        "SELECT e.id, e.course, e.year_level, p.first_name, p.last_name
+        "SELECT e.id, e.course, e.year_level, e.pre_reg_id, p.first_name, p.last_name
          FROM enrollments e
          JOIN pre_registrations p ON e.pre_reg_id = p.id
-         WHERE (e.section IS NULL OR e.section = '')
+         WHERE (e.section IS NULL OR e.section = '' OR e.section = 'TBA')
+           AND e.grade_confirmed = 1
          ORDER BY e.course ASC, e.year_level ASC, p.last_name ASC"
     );
     $to_assign = [];
@@ -90,6 +91,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'auto_
                     SELECT COUNT(*) FROM enrollments WHERE section = '" .
                     $conn->real_escape_string($target_section) . "'
                 ) WHERE section_code = '" . $conn->real_escape_string($target_section) . "'");
+
+                // Sync students.section
+                $pre_reg_id_here = (int)$student['pre_reg_id'];
+                $sync = $conn->prepare('UPDATE students SET section=? WHERE pre_reg_id=?');
+                $sync->bind_param('si', $target_section, $pre_reg_id_here);
+                $sync->execute();
+                $sync->close();
+
+                // Mark waiting list entry as Promoted
+                $promoted = 'Promoted';
+                $wl_upd = $conn->prepare(
+                    "UPDATE waiting_list SET status=? WHERE pre_reg_id=? AND status='Waiting'"
+                );
+                $wl_upd->bind_param('si', $promoted, $pre_reg_id_here);
+                $wl_upd->execute();
+                $wl_upd->close();
+
                 $assigned++;
             }
             $upd->close();
@@ -176,15 +194,21 @@ if ($res3) {
     }
 }
 
-// ── Unassigned enrollments ────────────────────────────────────
+// ── Get all unassigned enrollments — GATED: grade_confirmed=1 only ───
 $unassigned = [];
 $res4 = $conn->query(
     "SELECT e.*, p.first_name, p.last_name FROM enrollments e
      JOIN pre_registrations p ON e.pre_reg_id = p.id
-     WHERE (e.section IS NULL OR e.section = '')
+     WHERE (e.section IS NULL OR e.section = '' OR e.section = 'TBA')
+       AND e.grade_confirmed = 1
      ORDER BY p.last_name ASC"
 );
 if ($res4) while ($r = $res4->fetch_assoc()) $unassigned[] = $r;
+
+// Count students still blocked (grade not confirmed)
+$blocked_grade = 0;
+$bg = $conn->query("SELECT COUNT(*) c FROM enrollments WHERE grade_confirmed = 0");
+if ($bg) $blocked_grade = (int)$bg->fetch_assoc()['c'];
 
 // All active sections for dropdowns
 $all_sections = [];
@@ -276,6 +300,30 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
     <div class="page-title-bar">
       <h2 class="page-title"><i class="fa-solid fa-chalkboard"></i> Section Assignment</h2>
     </div>
+
+    <!-- Pipeline step indicator -->
+    <div style="margin:0 24px 18px;background:#eff6ff;border:1.5px solid #bfdbfe;
+                border-radius:10px;padding:12px 16px;font-size:.82rem;color:#1e40af;">
+      <i class="fa-solid fa-circle-info"></i>
+      <strong>Step 6 of 6</strong> — Assign students to sections manually or use
+      <strong>Auto-Assign All</strong> to let the system fill sections automatically.
+      Only students who have completed grade level confirmation appear in the queue.
+    </div>
+
+    <?php if ($blocked_grade > 0): ?>
+    <div style="margin:0 24px 16px;background:#fff7ed;border:1.5px solid #fcd34d;
+                border-radius:10px;padding:12px 16px;font-size:.82rem;color:#92400e;
+                display:flex;align-items:center;gap:10px;">
+      <i class="fa-solid fa-triangle-exclamation" style="flex-shrink:0;"></i>
+      <span>
+        <strong><?= $blocked_grade ?> student<?= $blocked_grade !== 1 ? 's' : '' ?></strong>
+        still need<?= $blocked_grade === 1 ? 's' : '' ?> grade level confirmation.
+        <a href="grade_assignment.php" style="color:#d97706;font-weight:700;">
+          Go to Grade Assignment →
+        </a>
+      </span>
+    </div>
+    <?php endif; ?>
 
     <?php if ($add_msg): ?>
     <div style="margin:0 24px 16px;background:#dcfce7;color:#16a34a;border:1px solid #86efac;

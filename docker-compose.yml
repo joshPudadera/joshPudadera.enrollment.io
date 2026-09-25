@@ -48,7 +48,7 @@ services:
       - sms_network
     restart: unless-stopped
 
-  # ── phpMyAdmin (optional, for DB management) ──────────────────
+  # ── phpMyAdmin  ──────────────────
   phpmyadmin:
     image: phpmyadmin:latest
     container_name: bcp_sms_phpmyadmin

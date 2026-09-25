@@ -1,12 +1,5 @@
 <?php
-// ============================================================
-//  FULL_SETUP.PHP  — BCP SMS
-//  One-click setup. Safe to re-run — uses DROP+CREATE when
-//  InnoDB corruption is detected (errno 1932 / "not exist in engine").
-//  Visit: http://localhost/sms/app/shared/full_setup.php
-// ============================================================
 
-// Disable exceptions — we handle errors manually
 mysqli_report(MYSQLI_REPORT_OFF);
 
 // $host = 'localhost';
@@ -37,7 +30,6 @@ if ($conn->connect_error) {
 
 $conn->set_charset('utf8mb4');
 
-// ── Helper ───────────────────────────────────────────────────
 function run(mysqli $conn, string $sql, string $label, array &$done, array &$errors): bool {
     $result = $conn->query($sql);
     if ($result !== false) {
@@ -48,14 +40,12 @@ function run(mysqli $conn, string $sql, string $label, array &$done, array &$err
     return false;
 }
 
-// ── 1. Verify database connection is usable ──────────────────
-// On hosted platforms the DB already exists — no CREATE DATABASE needed.
-// On local XAMPP we try to create it but suppress the error if it exists.
+
 @$conn->query("CREATE DATABASE IF NOT EXISTS `$db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
 $conn->select_db($db);
 $done[] = 'Database <strong>' . htmlspecialchars($db) . '</strong> ready';
 
-// ── 2. Repair InnoDB if corrupted ────────────────────────────
+
 $corrupt = false;
 $probe   = $conn->query("SELECT 1 FROM users LIMIT 1");
 if ($probe === false && $conn->errno === 1932) {
@@ -63,7 +53,7 @@ if ($probe === false && $conn->errno === 1932) {
 }
 if ($corrupt || isset($_GET['force_rebuild'])) {
     $done[] = '<strong style="color:#d97706">⚠ InnoDB corruption detected — dropping all tables for clean rebuild…</strong>';
-    // Drop in reverse FK order
+
     $drops = [
         'login_tokens','grades','attendance','enrollment_documents',
         'enrollments','waiting_list','pre_registrations','announcements',
@@ -77,7 +67,7 @@ if ($corrupt || isset($_GET['force_rebuild'])) {
     $done[] = 'All tables dropped — rebuilding from scratch…';
 }
 
-// ── 3. users ─────────────────────────────────────────────────
+// ── users ─────────────────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS users (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     username      VARCHAR(60)   NOT NULL UNIQUE,
@@ -91,7 +81,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 'Table <strong>users</strong>', $done, $errors);
 
-// ── 4. students ───────────────────────────────────────────────
+// ── students ───────────────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS students (
     id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     first_name   VARCHAR(100)  NOT NULL,
@@ -107,7 +97,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS students (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 'Table <strong>students</strong>', $done, $errors);
 
-// ── 5. sections ───────────────────────────────────────────────
+// ── sections ───────────────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS sections (
     id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     section_code    VARCHAR(20)  NOT NULL UNIQUE,
@@ -123,7 +113,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS sections (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>sections</strong>', $done, $errors);
 
-// ── 6. subjects ───────────────────────────────────────────────
+// ── subjects ───────────────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS subjects (
     id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     code       VARCHAR(20)  NOT NULL UNIQUE,
@@ -136,7 +126,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS subjects (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>subjects</strong>', $done, $errors);
 
-// ── 7. pre_registrations ──────────────────────────────────────
+// ── pre_registrations ──────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS pre_registrations (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id       INT UNSIGNED NULL DEFAULT NULL,
@@ -156,7 +146,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS pre_registrations (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>pre_registrations</strong>', $done, $errors);
 
-// ── 8. enrollment_documents ───────────────────────────────────
+// ── enrollment_documents ───────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS enrollment_documents (
     id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     pre_reg_id        INT UNSIGNED NOT NULL,
@@ -174,7 +164,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS enrollment_documents (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>enrollment_documents</strong>', $done, $errors);
 
-// ── 9. enrollments ────────────────────────────────────────────
+// ── enrollments ────────────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS enrollments (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     pre_reg_id    INT UNSIGNED NOT NULL,
@@ -196,7 +186,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS enrollments (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>enrollments</strong>', $done, $errors);
 
-// ── 10. waiting_list ──────────────────────────────────────────
+// ── waiting_list ──────────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS waiting_list (
     id             INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     pre_reg_id     INT UNSIGNED NOT NULL,
@@ -210,7 +200,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS waiting_list (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>waiting_list</strong>', $done, $errors);
 
-// ── 11. login_tokens ──────────────────────────────────────────
+// ── login_tokens ──────────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS login_tokens (
     id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id    INT UNSIGNED NOT NULL,
@@ -222,7 +212,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS login_tokens (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>login_tokens</strong>', $done, $errors);
 
-// ── 12. grades ────────────────────────────────────────────────
+// ──. grades ────────────────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS grades (
     id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     student_id  INT UNSIGNED NOT NULL,
@@ -241,7 +231,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS grades (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>grades</strong>', $done, $errors);
 
-// ── 13. attendance ────────────────────────────────────────────
+// ── attendance ────────────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS attendance (
     id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     student_id  INT UNSIGNED NOT NULL,
@@ -257,7 +247,7 @@ run($conn, "CREATE TABLE IF NOT EXISTS attendance (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>attendance</strong>', $done, $errors);
 
-// ── 14. announcements ─────────────────────────────────────────
+// ── announcements ─────────────────────────────────────────
 run($conn, "CREATE TABLE IF NOT EXISTS announcements (
     id        INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     title     VARCHAR(255) NOT NULL,
@@ -270,11 +260,11 @@ run($conn, "CREATE TABLE IF NOT EXISTS announcements (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 'Table <strong>announcements</strong>', $done, $errors);
 
-// ════════════════════════════════════════════════════════════
-//  COLUMN ADDITIONS (idempotent — safe to re-run)
-// ════════════════════════════════════════════════════════════
+
 $alters = [
     "ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS ref_number VARCHAR(50) DEFAULT NULL",
+    "ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS applicant_type ENUM('Freshman','Senior High','Octoberian','Transferee') DEFAULT NULL",
+    "ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS transfer_year_level VARCHAR(50) DEFAULT NULL",
     "ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL",
     "ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL",
     "ALTER TABLE pre_registrations MODIFY COLUMN user_id INT UNSIGNED NULL DEFAULT NULL",
@@ -284,9 +274,6 @@ foreach ($alters as $sql) {
 }
 $done[] = 'Schema columns verified';
 
-// ════════════════════════════════════════════════════════════
-//  SEED DATA
-// ════════════════════════════════════════════════════════════
 
 // ── Admin account ─────────────────────────────────────────────
 $hash = password_hash('Admin@1234', PASSWORD_DEFAULT);
@@ -450,7 +437,7 @@ $conn->close();
       <strong>Default Login Credentials</strong><br>
       Username: <code>admin</code><br>
       Password: <code>Admin@1234</code><br>
-      Database: <code>sms_db</code> @ <code>localhost</code>
+      Database: <code>sms_db</code> @ <code>enrollment.bcpsms2.com</code>
     </div>
     <a class="btn" href="../auth/signin.php">&#8594; Go to Sign In</a>
     <p class="warn">&#9888; Delete or rename <code>full_setup.php</code> after logging in.</p>
@@ -482,12 +469,12 @@ function openModal(id){var el=document.getElementById(id);if(el)el.classList.add
 function closeModal(id){var el=document.getElementById(id);if(el)el.classList.remove('active');}
 document.addEventListener('click',function(e){
   var cb=e.target.closest('[data-close]');if(cb){closeModal(cb.dataset.close);return;}
-  if(e.target.classList.contains('modal-overlay'))e.target.classList.remove('active');
+  if(e.target.classList.contains('modal-overlay')){e.target.classList.remove('active');return;}
+  if(e.target.closest('.modal'))return;
 });
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape'){document.querySelectorAll('.modal-overlay.active').forEach(function(o){o.classList.remove('active');});}
 });
-document.addEventListener('click',function(e){if(e.target.closest('.modal'))e.stopPropagation();},true);
 function escapeHtml(str){var d=document.createElement('div');d.appendChild(document.createTextNode(str));return d.innerHTML;}
 var _fsuCb=null;
 function ensureFsuModals(){

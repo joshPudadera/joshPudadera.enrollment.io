@@ -1,7 +1,7 @@
 <?php
 // ============================================================
 //  SETUP.PHP  (shared/)  — run ONCE, then delete.
-//  Visit: http://localhost/sms/app/shared/setup.php
+//  Visit: https://enrollment.bcpsms2.com/shared/setup.php
 // ============================================================
 require_once __DIR__ . '/db.php';
 

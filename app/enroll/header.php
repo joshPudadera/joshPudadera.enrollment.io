@@ -1,15 +1,16 @@
 <?php
 // ── Include this at the top of every enrollment step page ──
-// Set $current_step (1-6) before including.
+// Set $current_step (1-7) before including.
 $current_step = $current_step ?? 1;
 
 $steps = [
     1 => 'Admission Info',
-    2 => 'Choose Branch',
-    3 => 'Choose Course',
-    4 => 'Personal Info',
-    5 => 'Review',
-    6 => 'Confirmation',
+    2 => 'Applicant Type',
+    3 => 'Choose Branch',
+    4 => 'Choose Course',
+    5 => 'Personal Info',
+    6 => 'Review',
+    7 => 'Confirmation',
 ];
 ?>
 <!DOCTYPE html>

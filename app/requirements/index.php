@@ -79,8 +79,8 @@ $applicant = $_SESSION['enroll_applicant'] ?? null;
     </div>
 
     <div class="enroll-actions">
-      <a href="../dashboard/dashboard.php" class="btn-back">
-        <i class="fa-solid fa-arrow-left"></i> Back to Dashboard
+      <a href="../auth/signin.php" class="btn-back">
+        <i class="fa-solid fa-arrow-left"></i> Back to Sign In
       </a>
       <a href="upload.php" class="btn-proceed">
         Upload Documents <i class="fa-solid fa-arrow-right"></i>

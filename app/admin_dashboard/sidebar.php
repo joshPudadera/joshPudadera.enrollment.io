@@ -51,13 +51,12 @@ $ACTIVE_NAV = $ACTIVE_NAV ?? '';
         <i class="fa-solid fa-graduation-cap"></i><span>Enrollment</span><i class="fa-solid fa-chevron-down arrow"></i>
       </button>
       <div class="dropdown-menu" id="a-drop2">
-        <a href="<?= $APP_ROOT ?>enrollment_tab/enrollment_dashboard.php" class="dropdown-item">Enrollment Dashboard</a>
-        <a href="<?= $APP_ROOT ?>enrollment_tab/validation.php"           class="dropdown-item">Validation</a>
-        <a href="<?= $APP_ROOT ?>enrollment_tab/id_generation.php"        class="dropdown-item">ID Generation</a>
-        <a href="<?= $APP_ROOT ?>enrollment_tab/grade_assignment.php"     class="dropdown-item">Grade Assignment</a>
-        <a href="<?= $APP_ROOT ?>enrollment_tab/waiting_list.php"         class="dropdown-item">Waiting List</a>
-        <a href="<?= $APP_ROOT ?>enrollment_tab/cross_enrollment.php"     class="dropdown-item">Cross Enrollment</a>
-        <a href="<?= $APP_ROOT ?>enrollment_tab/section_assignment.php"   class="dropdown-item">Section Assignment</a>
+        <a href="<?= $APP_ROOT ?>enrollment_tab/validation.php"       class="dropdown-item">Validation</a>
+        <a href="<?= $APP_ROOT ?>enrollment_tab/id_generation.php"    class="dropdown-item">ID Generation</a>
+        <a href="<?= $APP_ROOT ?>enrollment_tab/grade_assignment.php" class="dropdown-item">Grade Assignment</a>
+        <a href="<?= $APP_ROOT ?>enrollment_tab/waiting_list.php"     class="dropdown-item">Waiting List</a>
+        <a href="<?= $APP_ROOT ?>enrollment_tab/cross_enrollment.php" class="dropdown-item">Cross Enrollment</a>
+        <a href="<?= $APP_ROOT ?>enrollment_tab/section_assignment.php" class="dropdown-item">Section Assignment</a>
       </div>
     </div>
 
@@ -68,53 +67,6 @@ $ACTIVE_NAV = $ACTIVE_NAV ?? '';
       <div class="dropdown-menu" id="a-drop3">
         <a href="<?= $APP_ROOT ?>admin/applicants.php"      class="dropdown-item">Applicants & Docs</a>
         <a href="<?= $APP_ROOT ?>admin/document_review.php" class="dropdown-item">AI Document Review</a>
-      </div>
-    </div>
-
-    <div class="sidebar-divider"></div>
-
-    <div class="sidebar-brand sidebar-brand-2">
-      <div class="brand-title">Academic</div>
-      <div class="brand-sub">Courses & Records</div>
-    </div>
-
-    <div class="nav-group">
-      <button class="sidebar-item <?= $ACTIVE_NAV==='subjects'?'active':'' ?> dropdown-trigger" data-target="a-drop4">
-        <i class="fa-solid fa-book"></i><span>Subjects</span><i class="fa-solid fa-chevron-down arrow"></i>
-      </button>
-      <div class="dropdown-menu" id="a-drop4">
-        <a href="<?= $APP_ROOT ?>academic_tab/subjects.php"     class="dropdown-item">Subject List</a>
-        <a href="<?= $APP_ROOT ?>academic_tab/add_subject.php"  class="dropdown-item">Add Subject</a>
-      </div>
-    </div>
-
-    <div class="nav-group">
-      <button class="sidebar-item <?= $ACTIVE_NAV==='grades'?'active':'' ?> dropdown-trigger" data-target="a-drop5">
-        <i class="fa-solid fa-star"></i><span>Grades</span><i class="fa-solid fa-chevron-down arrow"></i>
-      </button>
-      <div class="dropdown-menu" id="a-drop5">
-        <a href="<?= $APP_ROOT ?>academic_tab/grades.php"    class="dropdown-item">Enter Grades</a>
-        <a href="<?= $APP_ROOT ?>reports_tab/annual_report.php" class="dropdown-item">Grade Reports</a>
-      </div>
-    </div>
-
-    <div class="nav-group">
-      <button class="sidebar-item <?= $ACTIVE_NAV==='attendance'?'active':'' ?> dropdown-trigger" data-target="a-drop6">
-        <i class="fa-solid fa-clock-rotate-left"></i><span>Attendance</span><i class="fa-solid fa-chevron-down arrow"></i>
-      </button>
-      <div class="dropdown-menu" id="a-drop6">
-        <a href="<?= $APP_ROOT ?>academic_tab/attendance.php"  class="dropdown-item">Mark Attendance</a>
-        <a href="<?= $APP_ROOT ?>reports_tab/reports.php"      class="dropdown-item">Attendance Report</a>
-      </div>
-    </div>
-
-    <div class="nav-group">
-      <button class="sidebar-item <?= $ACTIVE_NAV==='advisers'?'active':'' ?> dropdown-trigger" data-target="a-drop7">
-        <i class="fa-solid fa-chalkboard-user"></i><span>Advisers</span><i class="fa-solid fa-chevron-down arrow"></i>
-      </button>
-      <div class="dropdown-menu" id="a-drop7">
-        <a href="<?= $APP_ROOT ?>academic_tab/advisers.php"              class="dropdown-item">All Advisers</a>
-        <a href="<?= $APP_ROOT ?>enrollment_tab/section_assignment.php"  class="dropdown-item">Assign Adviser</a>
       </div>
     </div>
 

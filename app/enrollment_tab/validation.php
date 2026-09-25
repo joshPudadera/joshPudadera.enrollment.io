@@ -10,7 +10,7 @@ $filter  = $_GET['status'] ?? 'Pending';
 $allowed = ['Pending','Approved','Rejected','Enrolled'];
 $filter  = in_array($filter, $allowed) ? $filter : 'Pending';
 $apps    = [];
-$res = $conn->query("
+    $res = $conn->query("
     SELECT p.*, COUNT(d.id) AS doc_count
     FROM pre_registrations p
     LEFT JOIN enrollment_documents d ON d.pre_reg_id = p.id
@@ -62,14 +62,34 @@ $conn->close();
       </div>
       <table class="crud-table">
         <thead>
-          <tr><th>Name</th><th>Course</th><th>Year</th><th>Docs</th><th>Submitted</th><th>Actions</th></tr>
+          <tr><th>Name</th><th>Course</th><th>Year</th><th>Type</th><th>Docs</th><th>Submitted</th><th>Actions</th></tr>
         </thead>
         <tbody>
-          <?php if ($apps): foreach ($apps as $app): ?>
+          <?php if ($apps): foreach ($apps as $app):
+            $atype   = $app['applicant_type'] ?? null;
+            $xfer_yr = $app['transfer_year_level'] ?? null;
+            $type_colors = [
+                'Freshman'    => ['#dcfce7','#16a34a'],
+                'Senior High' => ['#eff6ff','#2563eb'],
+                'Octoberian'  => ['#faf5ff','#7c3aed'],
+                'Transferee'  => ['#fff7ed','#d97706'],
+            ];
+            [$tbg,$tclr] = $type_colors[$atype] ?? ['#f3f4f6','#6b7280'];
+          ?>
           <tr>
             <td><?= htmlspecialchars($app['first_name'].' '.$app['last_name']) ?></td>
             <td style="font-size:.75rem;"><?= htmlspecialchars($app['course']) ?></td>
-            <td><?= htmlspecialchars($app['year_level']) ?></td>
+            <td><?= htmlspecialchars($xfer_yr ?: $app['year_level']) ?></td>
+            <td>
+              <?php if ($atype): ?>
+              <span style="background:<?= $tbg ?>;color:<?= $tclr ?>;border-radius:20px;
+                           padding:2px 8px;font-size:.7rem;font-weight:700;">
+                <?= htmlspecialchars($atype) ?>
+              </span>
+              <?php else: ?>
+              <span style="color:#aaa;font-size:.75rem;">—</span>
+              <?php endif; ?>
+            </td>
             <td><span class="<?= $app['doc_count']>0?'badge-active':'badge-inactive' ?>"><?= (int)$app['doc_count'] ?> file(s)</span></td>
             <td style="font-size:.75rem;color:#888;"><?= date('M d, Y', strtotime($app['submitted_at'])) ?></td>
             <td class="actions-cell">

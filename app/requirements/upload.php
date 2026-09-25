@@ -40,9 +40,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['doc_file'])) {
 
     $allowed_ext   = ['pdf','jpg','jpeg','png'];
     $ext           = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    // Only the three required documents are accepted
     $allowed_types = [
-        'Form138','Form137','BirthCertificate',
-        'Other'
+        'BirthCertificate',
+        'ReportCard',
+        'GoodMoral',
     ];
 
     if (!$doc_type || !in_array($doc_type, $allowed_types)) {
@@ -61,6 +63,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['doc_file'])) {
         $dest     = $upload_dir . $new_name;
 
         if (move_uploaded_file($file['tmp_name'], $dest)) {
+            // ── Run AI inspection immediately on upload ──────────
+            require_once __DIR__ . '/../shared/ai_inspect.php';
+            $ai_result = ai_inspect_document($dest, $doc_type);
+
             $_SESSION['uploaded_docs'][] = [
                 'type'        => $doc_type,
                 'file_name'   => $file['name'],
@@ -69,9 +75,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['doc_file'])) {
                 'ref_number'  => $ref_num ?: $auto_ref,
                 'pre_reg_id'  => $auto_pre_reg_id ?: 0,
                 'uploaded'    => date('Y-m-d H:i:s'),
-                'ai_result'   => null,
+                'ai_result'   => $ai_result,
             ];
-            $msg = htmlspecialchars($file['name']) . ' uploaded successfully.';
+
+            if (!$ai_result['success']) {
+                $msg = htmlspecialchars($file['name']) . ' uploaded. AI inspection could not run: '
+                     . htmlspecialchars($ai_result['error'] ?? 'Unknown error');
+            } else {
+                $verdict = $ai_result['is_authentic'];
+                $conf    = $ai_result['confidence'];
+                $verdict_label = match(true) {
+                    $verdict === true      => "✓ Authentic ({$conf}% confidence)",
+                    $verdict === false     => "✗ Possibly fake ({$conf}% confidence)",
+                    default                => "? Uncertain ({$conf}% confidence)",
+                };
+                $msg = htmlspecialchars($file['name']) . ' uploaded and inspected — ' . $verdict_label;
+            }
         } else {
             $err = 'Failed to save the file. Check folder permissions.';
         }
@@ -82,10 +101,9 @@ $uploaded     = $_SESSION['uploaded_docs'] ?? [];
 $uploaded_types = array_column($uploaded, 'type');
 
 $doc_types = [
-    'Form138'            => 'Form 138 (Report Card)',
-    'Form137'            => 'Form 137',
-    'BirthCertificate'   => 'PSA Birth Certificate',
-    'Other'              => 'Other Document',
+    'BirthCertificate' => 'PSA Birth Certificate',
+    'ReportCard'       => 'Report Card (Form 138)',
+    'GoodMoral'        => 'Certificate of Good Moral Character',
 ];
 
 include __DIR__ . '/header.php';
@@ -109,6 +127,50 @@ include __DIR__ . '/header.php';
       <i class="fa-solid fa-circle-xmark"></i> <?= $err ?>
     </div>
     <?php endif; ?>
+
+    <!-- ── Required documents checklist ── -->
+    <div style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:10px;
+                padding:16px 18px;margin-bottom:22px;">
+      <div style="font-size:.78rem;font-weight:700;color:#1a3a8c;margin-bottom:10px;">
+        <i class="fa-solid fa-clipboard-list"></i> Required Documents
+      </div>
+      <?php
+        $checklist = [
+            'BirthCertificate' => 'PSA Birth Certificate',
+            'ReportCard'       => 'Report Card (Form 138)',
+            'GoodMoral'        => 'Certificate of Good Moral Character',
+        ];
+        foreach ($checklist as $key => $label):
+          $done = in_array($key, $uploaded_types);
+          // Also get AI verdict if done
+          $ai_icon = '';
+          if ($done) {
+              foreach ($uploaded as $u) {
+                  if ($u['type'] === $key && !empty($u['ai_result']['success'])) {
+                      $v = $u['ai_result']['is_authentic'];
+                      $ai_icon = match(true) {
+                          $v === true  => ' <span style="color:#16a34a;font-size:.68rem;">(AI: Authentic)</span>',
+                          $v === false => ' <span style="color:#dc2626;font-size:.68rem;">(AI: Suspicious)</span>',
+                          default      => ' <span style="color:#d97706;font-size:.68rem;">(AI: Uncertain)</span>',
+                      };
+                      break;
+                  }
+              }
+          }
+      ?>
+      <div style="display:flex;align-items:center;gap:10px;padding:5px 0;
+                  border-bottom:1px solid #f0f2f5;font-size:.82rem;">
+        <?php if ($done): ?>
+          <i class="fa-solid fa-circle-check" style="color:#16a34a;width:16px;"></i>
+          <span style="color:#16a34a;font-weight:600;"><?= $label ?></span>
+          <?= $ai_icon ?>
+        <?php else: ?>
+          <i class="fa-regular fa-circle" style="color:#cbd5e1;width:16px;"></i>
+          <span style="color:#888;"><?= $label ?></span>
+        <?php endif; ?>
+      </div>
+      <?php endforeach; ?>
+    </div>
 
     <!-- ── Upload form ── -->
     <form method="POST" enctype="multipart/form-data" id="uploadForm">
@@ -202,12 +264,39 @@ include __DIR__ . '/header.php';
               <?= round($doc['file_size'] / 1024, 1) ?> KB
             </td>
             <td style="padding:10px 12px;">
-              <span style="font-size:.75rem;color:#16a34a;font-weight:600;">
-                <i class="fa-solid fa-circle-check"></i> Uploaded
-              </span>
-              <div style="font-size:.7rem;color:#aaa;margin-top:2px;">
-                AI will inspect on submission
-              </div>
+              <?php
+                $ai = $doc['ai_result'] ?? null;
+                if (!$ai || !$ai['success']):
+              ?>
+                <span style="font-size:.75rem;color:#f59e0b;font-weight:600;">
+                  <i class="fa-solid fa-clock"></i> Pending AI
+                </span>
+                <?php if (!empty($ai['error'])): ?>
+                <div style="font-size:.68rem;color:#dc2626;margin-top:2px;">
+                  <?= htmlspecialchars($ai['error']) ?>
+                </div>
+                <?php endif; ?>
+              <?php else:
+                $v    = $ai['is_authentic'];
+                $conf = (int)$ai['confidence'];
+                if ($v === true):
+              ?>
+                <span style="font-size:.75rem;color:#16a34a;font-weight:600;">
+                  <i class="fa-solid fa-circle-check"></i> Authentic
+                </span>
+              <?php elseif ($v === false): ?>
+                <span style="font-size:.75rem;color:#dc2626;font-weight:600;">
+                  <i class="fa-solid fa-circle-xmark"></i> Suspicious
+                </span>
+              <?php else: ?>
+                <span style="font-size:.75rem;color:#d97706;font-weight:600;">
+                  <i class="fa-solid fa-circle-question"></i> Uncertain
+                </span>
+              <?php endif; ?>
+                <div style="font-size:.68rem;color:#888;margin-top:2px;">
+                  <?= $conf ?>% confidence
+                </div>
+              <?php endif; ?>
             </td>
             <td style="padding:10px 12px;text-align:center;">
               <!-- Delete button -->
@@ -229,13 +318,19 @@ include __DIR__ . '/header.php';
     <?php endif; ?>
 
     <div class="enroll-actions" style="margin-top:28px;">
-      <a href="index.php" class="btn-back">
-        <i class="fa-solid fa-arrow-left"></i> Back
-      </a>
-      <?php if (!empty($uploaded)): ?>
+      <?php
+        $required_types = ['BirthCertificate', 'ReportCard', 'GoodMoral'];
+        $have_all = count(array_intersect($required_types, $uploaded_types)) === count($required_types);
+      ?>
+      <?php if ($have_all): ?>
       <a href="status.php" class="btn-proceed">
         Review Uploads <i class="fa-solid fa-arrow-right"></i>
       </a>
+      <?php elseif (!empty($uploaded)): ?>
+      <span style="font-size:.78rem;color:#888;align-self:center;">
+        <i class="fa-solid fa-circle-info"></i>
+        Upload all 3 required documents to continue.
+      </span>
       <?php endif; ?>
     </div>
 
@@ -273,12 +368,12 @@ function openModal(id){var el=document.getElementById(id);if(el)el.classList.add
 function closeModal(id){var el=document.getElementById(id);if(el)el.classList.remove('active');}
 document.addEventListener('click',function(e){
   var cb=e.target.closest('[data-close]');if(cb){closeModal(cb.dataset.close);return;}
-  if(e.target.classList.contains('modal-overlay'))e.target.classList.remove('active');
+  if(e.target.classList.contains('modal-overlay')){e.target.classList.remove('active');return;}
+  if(e.target.closest('.modal'))return;
 });
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape'){document.querySelectorAll('.modal-overlay.active').forEach(function(o){o.classList.remove('active');});}
 });
-document.addEventListener('click',function(e){if(e.target.closest('.modal'))e.stopPropagation();},true);
 function escapeHtml(str){var d=document.createElement('div');d.appendChild(document.createTextNode(str));return d.innerHTML;}
 var _uplConfirmCb=null;
 function ensureUplModals(){

@@ -7,12 +7,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $d = $_SESSION['enroll'] ?? [];
 if (empty($d['first_name'])) { header('Location: form.php'); exit; }
 
-$current_step = 5;
+$current_step = 6;
 include __DIR__ . '/header.php';
 
 $rows = [
-    'Branch / Campus'       => $d['branch']            ?? '—',
-    'Program'               => $d['course']             ?? '—',
+    'Applicant Type'        => $d['applicant_type']         ?? '—',
+    'Branch / Campus'       => $d['branch']                 ?? '—',
+    'Program'               => $d['course']                 ?? '—',
     'Last Name'             => $d['last_name']          ?? '—',
     'First Name'            => $d['first_name']         ?? '—',
     'Middle Name'           => $d['middle_name']        ?? '—',
@@ -27,7 +28,7 @@ $rows = [
     'Mobile'                => $d['phone']              ?? '—',
     'Address'               => $d['address']            ?? '—',
     'Previous School'       => $d['prev_school']        ?? '—',
-    'Last Year Level'       => $d['last_year_level']    ?? '—',
+    'Last Year Level'       => $d['last_year_level']    ?? ($d['transfer_year_level'] ?? '—'),
     'Year Graduated'        => $d['grad_year']          ?? '—',
     'Emergency Contact'     => $d['emergency_name']     ?? '—',
     'Relationship'          => $d['emergency_relation'] ?? '—',

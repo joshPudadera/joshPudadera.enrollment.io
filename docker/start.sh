@@ -5,7 +5,6 @@ PORT="${PORT:-80}"
 
 echo "[start] PORT=${PORT}"
 
-# Configure Apache to listen on the port provided by HostForge
 cat > /etc/apache2/ports.conf <<EOF
 Listen ${PORT}
 EOF

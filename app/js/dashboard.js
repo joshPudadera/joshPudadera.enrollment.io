@@ -114,12 +114,16 @@ function closeModal(id) {
 }
 
 document.addEventListener('click', function(e) {
-    // Prevent clicks inside a modal from closing it via the overlay handler.
-    // We do NOT stopPropagation here — that would break buttons inside modals.
-    if (e.target.closest('.modal')) return;
+    // Handle [data-close] buttons first — these live inside .modal and must
+    // be checked before the "inside modal" guard below.
     var closeBtn = e.target.closest('[data-close]');
     if (closeBtn) { closeModal(closeBtn.dataset.close); return; }
-    if (e.target.classList.contains('modal-overlay')) e.target.classList.remove('active');
+
+    // Click on the backdrop (the overlay element itself, not the modal box) → close.
+    if (e.target.classList.contains('modal-overlay')) { e.target.classList.remove('active'); return; }
+
+    // All other clicks inside the modal box are ignored (no unintended close).
+    if (e.target.closest('.modal')) return;
 });
 
 document.addEventListener('keydown', function(e) {
@@ -412,13 +416,45 @@ document.querySelectorAll('.btn-view').forEach(function(btn) {
             .then(function(d) {
                 if (!d.success) { showToast(d.message, 'error'); return; }
                 var s = d.student;
-                var set = function(id, val) { var el = document.getElementById(id); if (el) el.textContent = val; };
-                set('vName',    s.first_name + ' ' + s.last_name);
+                var set = function(id, val) { var el = document.getElementById(id); if (el) el.textContent = val || '—'; };
+                var setHtml = function(id, html) { var el = document.getElementById(id); if (el) el.innerHTML = html; };
+
+                set('vName',    (s.first_name || '') + ' ' + (s.last_name || ''));
                 set('vBirthday', s.birthday);
                 set('vPhone',   s.phone);
                 set('vCourse',  s.course);
-                set('vYear',    s.year_level);
+
+                // Live enrollment data
+                set('vRef',    s.ref_number);
+                set('vYear',   s.year_level);
                 set('vSection', s.section);
+
+                // ID Number
+                if (document.getElementById('vIdNum')) {
+                    if (s.id_number) {
+                        document.getElementById('vIdNum').innerHTML =
+                            '<code style="background:#eff6ff;color:#2563eb;padding:2px 8px;border-radius:4px;">' +
+                            s.id_number + '</code>';
+                    } else {
+                        document.getElementById('vIdNum').innerHTML =
+                            '<span style="color:#ef4444;font-size:.8rem;">Not yet generated</span>';
+                    }
+                }
+
+                // Pipeline status
+                if (document.getElementById('vIdDone')) {
+                    setHtml('vIdDone', s.id_number
+                        ? '<span style="color:#16a34a;font-weight:600;"><i class="fa-solid fa-circle-check"></i> Yes — ' + s.id_number + '</span>'
+                        : '<span style="color:#ef4444;font-weight:600;"><i class="fa-solid fa-clock"></i> Pending</span>');
+                    setHtml('vGradeDone', parseInt(s.grade_confirmed)
+                        ? '<span style="color:#16a34a;font-weight:600;"><i class="fa-solid fa-circle-check"></i> Confirmed (' + s.year_level + ')</span>'
+                        : '<span style="color:#f59e0b;font-weight:600;"><i class="fa-solid fa-clock"></i> Not confirmed</span>');
+                    var sec = s.section || '';
+                    setHtml('vSecDone', (sec && sec !== 'TBA')
+                        ? '<span style="color:#16a34a;font-weight:600;"><i class="fa-solid fa-circle-check"></i> ' + sec + '</span>'
+                        : '<span style="color:#f59e0b;font-weight:600;"><i class="fa-solid fa-clock"></i> In waiting queue</span>');
+                }
+
                 openModal('viewModal');
             })
             .catch(function() { showToast('Failed to load student.', 'error'); });

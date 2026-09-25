@@ -290,18 +290,19 @@ function closeModal(id) {
     if (el) el.classList.remove('active');
 }
 document.addEventListener('click', (e) => {
+    // [data-close] buttons live inside .modal — check them first.
     const cb = e.target.closest('[data-close]');
     if (cb) { closeModal(cb.dataset.close); return; }
-    if (e.target.classList.contains('modal-overlay')) e.target.classList.remove('active');
+    // Clicking the backdrop (overlay itself) closes the modal.
+    if (e.target.classList.contains('modal-overlay')) { e.target.classList.remove('active'); return; }
+    // All other clicks inside the modal box are ignored.
+    if (e.target.closest('.modal')) return;
 });
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         document.querySelectorAll('.modal-overlay.active').forEach(o => o.classList.remove('active'));
     }
 });
-document.addEventListener('click', (e) => {
-    if (e.target.closest('.modal')) e.stopPropagation();
-}, true);
 
 function _accEscapeHtml(str) {
     const d = document.createElement('div');

@@ -1,6 +1,6 @@
 <?php
 // TEMP TOOL — resets a student application back to Pending so you can re-approve
-// Visit: http://localhost/sms/app/shared/reset_approval.php
+// Visit: https://enrollment.bcpsms2.com/shared/reset_approval.php
 // DELETE THIS FILE after use.
 session_start();
 require_once __DIR__ . '/db.php';
@@ -156,12 +156,12 @@ function openModal(id){var el=document.getElementById(id);if(el)el.classList.add
 function closeModal(id){var el=document.getElementById(id);if(el)el.classList.remove('active');}
 document.addEventListener('click',function(e){
   var cb=e.target.closest('[data-close]');if(cb){closeModal(cb.dataset.close);return;}
-  if(e.target.classList.contains('modal-overlay'))e.target.classList.remove('active');
+  if(e.target.classList.contains('modal-overlay')){e.target.classList.remove('active');return;}
+  if(e.target.closest('.modal'))return;
 });
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape'){document.querySelectorAll('.modal-overlay.active').forEach(function(o){o.classList.remove('active');});}
 });
-document.addEventListener('click',function(e){if(e.target.closest('.modal'))e.stopPropagation();},true);
 function escapeHtml(str){var d=document.createElement('div');d.appendChild(document.createTextNode(str));return d.innerHTML;}
 var _rstCb=null;
 function ensureRstModals(){

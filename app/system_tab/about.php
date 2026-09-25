@@ -41,7 +41,7 @@ ob_start();
         <tr><td style="color:#888;">Database</td><td>sms_db (MySQL)</td></tr>
         <tr><td style="color:#888;">DB Tables</td><td><?= $table_count ?></td></tr>
         <tr><td style="color:#888;">Web Server</td><td><?= htmlspecialchars($_SERVER['SERVER_SOFTWARE'] ?? 'Apache') ?></td></tr>
-        <tr><td style="color:#888;">Environment</td><td>XAMPP / localhost</td></tr>
+        <tr><td style="color:#888;">Environment</td><td>Hosted / enrollment.bcpsms2.com</td></tr>
       </tbody>
     </table>
   </div>

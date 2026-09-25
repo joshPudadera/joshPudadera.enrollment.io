@@ -1,6 +1,15 @@
 <?php
 session_start();
-$current_step = 2;
+// Accept applicant_type from URL (when coming from applicant_type.php) or session
+$type = trim($_GET['type'] ?? $_SESSION['enroll']['applicant_type'] ?? '');
+$valid_types = ['Freshman', 'Senior High', 'Octoberian', 'Transferee'];
+if (!$type || !in_array($type, $valid_types)) {
+    header('Location: applicant_type.php'); exit;
+}
+if (!isset($_SESSION['enroll'])) $_SESSION['enroll'] = [];
+$_SESSION['enroll']['applicant_type'] = $type;
+
+$current_step = 3;
 include __DIR__ . '/header.php';
 
 $branches = [
@@ -30,7 +39,7 @@ $branches = [
     </div>
 
     <div class="enroll-actions">
-      <a href="index.php" class="btn-back">
+      <a href="applicant_type.php" class="btn-back">
         <i class="fa-solid fa-arrow-left"></i> Back
       </a>
     </div>

@@ -40,6 +40,27 @@ $filter_type   = $_GET['type']   ?? '';
 if ($filter_status) $docs = array_filter($docs, fn($d) => $d['status'] === $filter_status);
 if ($filter_type)   $docs = array_filter($docs, fn($d) => $d['document_type'] === $filter_type);
 
+// ── Group docs by pre_reg_id so we can show one Generate button per applicant ──
+$by_applicant = [];
+foreach ($docs as $doc) {
+    $pid = (int)$doc['pre_reg_id'];
+    if (!isset($by_applicant[$pid])) {
+        $by_applicant[$pid] = [
+            'pre_reg_id' => $pid,
+            'first_name' => $doc['first_name'],
+            'last_name'  => $doc['last_name'],
+            'course'     => $doc['course'],
+            'types'      => [],          // doc types submitted
+            'all_approved' => true,      // flipped to false if any not Approved
+        ];
+    }
+    $by_applicant[$pid]['types'][] = $doc['document_type'];
+    if ($doc['status'] !== 'Approved') {
+        $by_applicant[$pid]['all_approved'] = false;
+    }
+}
+$required_doc_types = ['BirthCertificate', 'ReportCard', 'GoodMoral'];
+
 // ── Handle admin status update ────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['doc_id'])) {
     $doc_id    = (int)$_POST['doc_id'];
@@ -184,7 +205,60 @@ $ACTIVE_NAV = 'documents';
 
     <div style="padding:0 24px;">
 
-      <?php if (empty($docs)): ?>
+      <!-- ── Per-applicant Generate Document panels ── -->
+      <?php foreach ($by_applicant as $pid => $appl):
+        $has_all = count(array_intersect($required_doc_types, $appl['types'])) === 3;
+        $all_apv = $appl['all_approved'];
+        $appl_name = htmlspecialchars(trim($appl['first_name'] . ' ' . $appl['last_name']));
+      ?>
+      <div style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:10px;
+                  padding:14px 18px;margin-bottom:14px;display:flex;
+                  align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+        <div>
+          <div style="font-weight:700;font-size:.92rem;color:#1a1a2e;">
+            <i class="fa-solid fa-user-graduate" style="color:#1a3a8c;margin-right:6px;"></i>
+            <?= $appl_name ?>
+            <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;">
+              — <?= htmlspecialchars($appl['course']) ?>
+            </span>
+          </div>
+          <div style="font-size:.75rem;color:#888;margin-top:4px;">
+            <?php foreach ($required_doc_types as $rtype):
+              $submitted = in_array($rtype, $appl['types']);
+              $labels    = ['BirthCertificate'=>'Birth Cert','ReportCard'=>'Report Card','GoodMoral'=>'Good Moral'];
+              $color     = $submitted ? '#16a34a' : '#dc2626';
+              $icon      = $submitted ? 'fa-circle-check' : 'fa-circle-xmark';
+            ?>
+            <span style="margin-right:12px;color:<?= $color ?>;">
+              <i class="fa-solid <?= $icon ?>"></i> <?= $labels[$rtype] ?>
+            </span>
+            <?php endforeach; ?>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <?php if (!$has_all): ?>
+          <span style="font-size:.78rem;color:#d97706;font-weight:600;">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            Missing <?= 3 - count(array_intersect($required_doc_types, $appl['types'])) ?> required document(s)
+          </span>
+          <?php elseif (!$all_apv): ?>
+          <span style="font-size:.78rem;color:#2563eb;font-weight:600;">
+            <i class="fa-solid fa-circle-info"></i>
+            All 3 docs present — approve all to enable generation
+          </span>
+          <?php endif; ?>
+          <!-- Generate button: enabled only when all 3 present (approval optional but shown) -->
+          <button class="btn-primary btn-generate-doc"
+                  data-pre-reg-id="<?= $pid ?>"
+                  data-name="<?= $appl_name ?>"
+                  <?= !$has_all ? 'disabled style="opacity:.45;cursor:not-allowed;"' : '' ?>>
+            <i class="fa-solid fa-file-word"></i> Generate Document
+          </button>
+        </div>
+      </div>
+      <?php endforeach; ?>
+
+      <?php if (empty($by_applicant)): ?>
       <div class="crud-card" style="text-align:center;padding:40px;color:#aaa;">
         <i class="fa-solid fa-folder-open" style="font-size:2rem;margin-bottom:12px;display:block;"></i>
         No documents found<?= $filter_status ? " with status \"$filter_status\"" : '' ?>.
@@ -447,6 +521,23 @@ $ACTIVE_NAV = 'documents';
                 'registration_number' => 'Registration No.',
                 'date_issued'         => 'Date Issued',
                 'issuing_authority'   => 'Issuing Authority',
+                // Birth Certificate
+                'name_of_mother'      => "Mother's Name",
+                'name_of_father'      => "Father's Name",
+                // Report Card
+                'lrn'                 => 'LRN',
+                'school_name'         => 'School',
+                'school_year'         => 'School Year',
+                'grade_level'         => 'Grade Level',
+                'strand_or_track'     => 'Strand / Track',
+                'general_average'     => 'General Average',
+                'class_adviser'       => 'Class Adviser',
+                'principal'           => 'Principal',
+                // Good Moral
+                'issuing_school'      => 'Issuing School',
+                'purpose'             => 'Purpose',
+                'year_graduated'      => 'Year Graduated',
+                // Catch-all
                 'other_details'       => 'Other Details',
               ];
               foreach ($fields_map as $key => $label):
@@ -535,6 +626,54 @@ document.querySelectorAll('.btn-doc-rej').forEach(function(btn) {
         });
     });
 });
+
+// ── Generate Document ─────────────────────────────────────────
+// Uses a hidden form targeting a hidden iframe so the page does not
+// navigate away — the browser receives the .docx as a download.
+(function () {
+    // Create a hidden iframe that will receive the .docx stream
+    var iframe = document.createElement('iframe');
+    iframe.name  = 'docx_download_frame';
+    iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;';
+    document.body.appendChild(iframe);
+
+    // Create the hidden POST form
+    var dlForm = document.createElement('form');
+    dlForm.method = 'POST';
+    dlForm.action = '../shared/generate_docx.php';
+    dlForm.target = 'docx_download_frame';
+    dlForm.innerHTML = '<input type="hidden" name="pre_reg_id" id="dlPreRegId" value=""/>';
+    document.body.appendChild(dlForm);
+
+    document.querySelectorAll('.btn-generate-doc').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            if (btn.disabled) return;
+            var pid  = btn.dataset.preRegId;
+            var name = btn.dataset.name;
+            showConfirm(
+                'Generate the admission Word document for ' + name + '?\n\n' +
+                'The file will download automatically.',
+                function () {
+                    // Show a brief loading state
+                    var orig = btn.innerHTML;
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generating…';
+
+                    document.getElementById('dlPreRegId').value = pid;
+                    dlForm.submit();
+
+                    // Restore button after a reasonable delay
+                    // (we can't detect iframe download completion directly)
+                    setTimeout(function () {
+                        btn.disabled = false;
+                        btn.innerHTML = orig;
+                    }, 4000);
+                },
+                'Generate Document'
+            );
+        });
+    });
+}());
 </script>
 </body>
 </html>

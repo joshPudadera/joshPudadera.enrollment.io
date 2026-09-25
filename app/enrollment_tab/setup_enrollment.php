@@ -2,7 +2,7 @@
 // ============================================================
 //  SETUP_ENROLLMENT.PHP
 //  Run ONCE to create all enrollment tables and seed sections.
-//  Visit: http://localhost/sms/app/enrollment_tab/setup_enrollment.php
+//  Visit: https://enrollment.bcpsms2.com/enrollment_tab/setup_enrollment.php
 //  DELETE this file after running it.
 // ============================================================
 require_once __DIR__ . '/../shared/db.php';
