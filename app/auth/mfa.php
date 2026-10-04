@@ -2,7 +2,13 @@
 session_start();
 // Must have a pending MFA session — otherwise redirect back to sign-in
 if (empty($_SESSION['mfa_pending'])) {
-    header('Location: signin.php'); exit;
+    // On hosted platforms, if you keep seeing this redirect, it means the
+    // session written in auth_actions.php is not being read here.
+    // Common causes:
+    //   1. session.save_path not writable on the host — check PHP error log
+    //   2. Cookie domain mismatch — ensure APP_URL in .env uses the exact domain
+    //   3. HTTP vs HTTPS mismatch — set session.cookie_secure=1 in php.ini
+    header('Location: signin.php?mfa_err=session_lost'); exit;
 }
 // Already fully logged in — no need for MFA
 if (!empty($_SESSION['user_id'])) {

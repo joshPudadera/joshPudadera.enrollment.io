@@ -66,6 +66,11 @@ if (!empty($_SESSION['user_id'])) {
         <i class="fa-solid fa-clock"></i>
         You were signed out due to inactivity. Please sign in again.
       </div>
+      <?php elseif (($_GET['mfa_err'] ?? '') === 'session_lost'): ?>
+      <div class="auth-error" style="display:block;margin-bottom:14px;background:#fff7ed;color:#92400e;border-color:#fcd34d;">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+        Verification session lost — this usually means your browser is blocking cookies or the server session expired. Please sign in again.
+      </div>
       <?php endif; ?>
 
       <form id="signinForm" style="width:100%">

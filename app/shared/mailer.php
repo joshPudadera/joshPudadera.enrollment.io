@@ -87,7 +87,10 @@ function send_email(string $to, string $subject, string $html): bool {
     $pass    = $c['pass'];
     $from    = $c['user'];      // sender address == SMTP login
     $name    = $c['from_name'];
-    $timeout = 15;
+    $timeout = 20; // increased for hosted environments with higher latency
+
+    // Auto-detect SSL mode: if port is 465 force ssl regardless of MAIL_ENCRYPT setting
+    if ($port === 465) $encrypt = 'ssl';
 
     // ── 1. Open socket ────────────────────────────────────────
     $socket_host = ($encrypt === 'ssl') ? "ssl://$host" : $host;

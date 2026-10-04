@@ -49,6 +49,15 @@ if ($conn->errno) {
 
 $conn->set_charset('utf8mb4');
 
+// ── Session regeneration after MFA verify ────────────────────
+// Doing session_regenerate_id inside an AJAX call doesn't reliably
+// deliver the new cookie on hosted platforms. Instead we flag it and
+// regenerate here on the first full page load after MFA verification.
+if (isset($_SESSION['regen_on_load']) && !empty($_SESSION['user_id'])) {
+    unset($_SESSION['regen_on_load']);
+    session_regenerate_id(true);
+}
+
 // Ensure ref_number column exists — suppress silently, it's added during setup
 @$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS ref_number VARCHAR(50) DEFAULT NULL");
 

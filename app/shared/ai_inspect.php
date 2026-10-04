@@ -16,12 +16,14 @@
 function ai_inspect_document(string $abs_path, string $doc_type, string $redacted_path = ''): array {
 
     // ── 1. Load API key ──────────────────────────────────────
-    $api_key = getenv('OPENAI_API_KEY') ?: '';
+    // Reads from environment variable AI_API (set in hosting control panel
+    // or in app/.env for local development).
+    $api_key = getenv('AI_API') ?: '';
     if (!$api_key) {
         $env = __DIR__ . '/../.env';
         if (file_exists($env)) {
             foreach (file($env, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-                if (str_starts_with(trim($line), 'OPENAI_API_KEY=')) {
+                if (str_starts_with(trim($line), 'AI_API=')) {
                     $api_key = trim(substr($line, strpos($line, '=') + 1));
                     break;
                 }
@@ -30,7 +32,7 @@ function ai_inspect_document(string $abs_path, string $doc_type, string $redacte
     }
     if (!$api_key) {
         return ['success' => false,
-                'error'   => 'OpenAI API key not configured. Add OPENAI_API_KEY=sk-... to app/.env'];
+                'error'   => 'OpenAI API key not configured. Set the AI_API environment variable or add AI_API=sk-... to app/.env'];
     }
 
     // ── 2. Resolve which file to send ─────────────────────────

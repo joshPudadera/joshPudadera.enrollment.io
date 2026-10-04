@@ -86,7 +86,11 @@ case 'login':
         $mfa_code    = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         $mfa_expires = time() + 300;
 
-        session_regenerate_id(true);
+        // Store in session WITHOUT regenerating the session ID here.
+        // session_regenerate_id can cause the new ID to not reach the browser
+        // on hosted platforms when triggered from an AJAX fetch (no page reload).
+        // The session data is written to the same session — the browser already
+        // has the cookie — so the MFA page will find mfa_pending correctly.
         $_SESSION['mfa_pending'] = [
             'user_id'    => $user['id'],
             'username'   => $user['username'],
@@ -171,7 +175,8 @@ case 'verify_mfa':
     }
 
     // Code correct — complete login
-    session_regenerate_id(true);
+    // Regenerate AFTER the page redirect, not during AJAX, so the new
+    // session ID cookie reaches the browser on the next full page load.
     $_SESSION['user_id']       = $pending['user_id'];
     $_SESSION['username']      = $pending['username'];
     $_SESSION['email']         = $pending['email'];
@@ -179,6 +184,7 @@ case 'verify_mfa':
     $_SESSION['last_name']     = $pending['last_name'];
     $_SESSION['role']          = $pending['role'];
     $_SESSION['last_activity'] = time();
+    $_SESSION['regen_on_load'] = true; // flag: regenerate ID on next full page load
     unset($_SESSION['mfa_pending']);
 
     respond(true, 'Verified.', ['role' => $_SESSION['role']]);
