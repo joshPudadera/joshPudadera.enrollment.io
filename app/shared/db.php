@@ -52,9 +52,18 @@ $conn->set_charset('utf8mb4');
 // Ensure ref_number column exists — suppress silently, it's added during setup
 @$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS ref_number VARCHAR(50) DEFAULT NULL");
 
+// Ensure students.pre_reg_id column exists (links a student row back to its application)
+@$conn->query("ALTER TABLE students ADD COLUMN IF NOT EXISTS pre_reg_id INT UNSIGNED DEFAULT NULL");
+
 // ── Helper: check if enrollment tables exist ─────────────────
 function enrollment_tables_exist(mysqli $conn): bool {
     return $conn->query("SHOW TABLES LIKE 'pre_registrations'")->num_rows > 0;
+}
+
+// ── Helper: is the current user admin OR staff ────────────────
+function is_admin_or_staff(): bool {
+    $role = $_SESSION['role'] ?? '';
+    return $role === 'admin' || $role === 'staff';
 }
 
 // ── Helper: show setup prompt and exit if tables missing ─────

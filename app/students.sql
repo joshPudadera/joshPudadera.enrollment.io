@@ -34,6 +34,7 @@ VALUES (
 -- ── 2. students ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS students (
     id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    pre_reg_id   INT UNSIGNED DEFAULT NULL,
     first_name   VARCHAR(100)  NOT NULL,
     last_name    VARCHAR(100)  NOT NULL,
     birthday     DATE          NOT NULL,

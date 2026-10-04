@@ -1,7 +1,13 @@
 <?php
-// Admin sidebar — all features
+// Serves admin sidebar for admins, staff sidebar for staff users.
 $APP_ROOT   = $APP_ROOT   ?? '../';
 $ACTIVE_NAV = $ACTIVE_NAV ?? '';
+$_role = $_SESSION['role'] ?? 'admin';
+if ($_role === 'staff') {
+    // Staff: include the staff sidebar instead
+    require_once (defined('STAFF_SIDEBAR_ROOT') ? STAFF_SIDEBAR_ROOT : __DIR__ . '/../staff_dashboard/') . 'sidebar.php';
+    return;
+}
 ?>
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-header">
@@ -37,13 +43,10 @@ $ACTIVE_NAV = $ACTIVE_NAV ?? '';
     </div>
 
     <div class="nav-group">
-      <button class="sidebar-item <?= $ACTIVE_NAV==='students'?'active':'' ?> dropdown-trigger" data-target="a-drop1">
-        <i class="fa-solid fa-user-graduate"></i><span>Students</span><i class="fa-solid fa-chevron-down arrow"></i>
-      </button>
-      <div class="dropdown-menu" id="a-drop1">
-        <a href="<?= $APP_ROOT ?>admin_dashboard/students.php" class="dropdown-item">All Students</a>
-        <a href="<?= $APP_ROOT ?>admin_dashboard/students.php?action=add" class="dropdown-item">Add Student</a>
-      </div>
+      <a href="<?= $APP_ROOT ?>admin_dashboard/students.php"
+         class="sidebar-item <?= $ACTIVE_NAV==='students'?'active':'' ?>">
+        <i class="fa-solid fa-user-graduate"></i><span>Students</span>
+      </a>
     </div>
 
     <div class="nav-group">
@@ -55,7 +58,6 @@ $ACTIVE_NAV = $ACTIVE_NAV ?? '';
         <a href="<?= $APP_ROOT ?>enrollment_tab/id_generation.php"    class="dropdown-item">ID Generation</a>
         <a href="<?= $APP_ROOT ?>enrollment_tab/grade_assignment.php" class="dropdown-item">Grade Assignment</a>
         <a href="<?= $APP_ROOT ?>enrollment_tab/waiting_list.php"     class="dropdown-item">Waiting List</a>
-        <a href="<?= $APP_ROOT ?>enrollment_tab/cross_enrollment.php" class="dropdown-item">Cross Enrollment</a>
         <a href="<?= $APP_ROOT ?>enrollment_tab/section_assignment.php" class="dropdown-item">Section Assignment</a>
       </div>
     </div>
@@ -65,8 +67,10 @@ $ACTIVE_NAV = $ACTIVE_NAV ?? '';
         <i class="fa-solid fa-file-shield"></i><span>Documents</span><i class="fa-solid fa-chevron-down arrow"></i>
       </button>
       <div class="dropdown-menu" id="a-drop3">
-        <a href="<?= $APP_ROOT ?>admin/applicants.php"      class="dropdown-item">Applicants & Docs</a>
-        <a href="<?= $APP_ROOT ?>admin/document_review.php" class="dropdown-item">AI Document Review</a>
+        <a href="<?= $APP_ROOT ?>admin/applicants.php"           class="dropdown-item">Applicants &amp; Docs</a>
+        <a href="<?= $APP_ROOT ?>admin/document_review.php"       class="dropdown-item">AI Document Review</a>
+        <a href="<?= $APP_ROOT ?>admin/document_redaction.php"    class="dropdown-item <?= $ACTIVE_NAV==='redaction' ?'active':'' ?>"><i class="fa-solid fa-shield-halved" style="margin-right:4px;font-size:.78rem;"></i>Redaction Review</a>
+        <a href="<?= $APP_ROOT ?>admin/generated_documents.php"   class="dropdown-item <?= $ACTIVE_NAV==='gen_docs'  ?'active':'' ?>"><i class="fa-solid fa-file-word"    style="margin-right:4px;font-size:.78rem;color:#2563eb;"></i>Generated Documents</a>
       </div>
     </div>
 
@@ -120,4 +124,6 @@ $ACTIVE_NAV = $ACTIVE_NAV ?? '';
 
   </div>
 </aside>
-<script src="<?= $APP_ROOT ?>js/sidebar.js"></script>
+<script src="<?= $APP_ROOT ?>js/sidebar.js" defer></script>
+<script>window._APP_ROOT = '<?= $APP_ROOT ?>';</script>
+<script src="<?= $APP_ROOT ?>js/inactivity.js" defer></script>

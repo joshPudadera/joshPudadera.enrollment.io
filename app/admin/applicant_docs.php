@@ -2,7 +2,7 @@
 session_start();
 require_once __DIR__ . '/../shared/db.php';
 if (empty($_SESSION['user_id']))   { header('Location: ../auth/signin.php'); exit; }
-if ($_SESSION['role'] !== 'admin') { header('Location: ../admin_dashboard/dashboard.php'); exit; }
+if (!is_admin_or_staff()) { header('Location: ../auth/signin.php'); exit; }
 
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'A', 0, 1));
 $pre_reg_id   = (int)($_GET['id'] ?? 0);
@@ -174,97 +174,135 @@ require_once __DIR__ . '/../admin_dashboard/sidebar.php';
       </div>
       <?php else: ?>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;padding:16px;">
-        <?php foreach ($docs as $doc):
+      <?php
+      // Group by document type so we can show attempts together
+      $doc_type_labels = [
+          'Form137'=>'Form 137','BirthCertificate'=>'PSA Birth Certificate',
+          'GoodMoral'=>'Good Moral','MedicalCert'=>'Medical Certificate',
+          'IDPhoto'=>'ID Photo','Form138'=>'Form 138','ReportCard'=>'Report Card (Form 138)','Other'=>'Other',
+      ];
+      $grouped = [];
+      foreach ($docs as $doc) {
+          $grouped[$doc['document_type']][] = $doc;
+      }
+      ?>
+
+      <div style="display:flex;flex-direction:column;gap:18px;padding:16px;">
+      <?php foreach ($grouped as $dtype => $type_docs):
+        $type_label  = $doc_type_labels[$dtype] ?? $dtype;
+        $has_approved= (bool)array_filter($type_docs, fn($d) => $d['status'] === 'Approved');
+        $latest_st   = $type_docs[count($type_docs)-1]['status'];
+        $attempt_cnt = count($type_docs);
+        [$hdr_bg,$hdr_clr,$hdr_icon] = $has_approved
+            ? ['#f0fdf4','#16a34a','fa-circle-check']
+            : ($latest_st==='Rejected'
+                ? ['#fff1f2','#dc2626','fa-circle-xmark']
+                : ['#fffbeb','#d97706','fa-clock']);
+      ?>
+      <div style="border:1.5px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+
+        <!-- Type header -->
+        <div style="background:<?= $hdr_bg ?>;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <div style="font-weight:700;font-size:.88rem;color:<?= $hdr_clr ?>;">
+            <i class="fa-solid <?= $hdr_icon ?>"></i>
+            <?= htmlspecialchars($type_label) ?>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <?php if ($has_approved): ?>
+            <span style="background:#dcfce7;color:#16a34a;padding:2px 10px;border-radius:20px;font-size:.72rem;font-weight:700;">Approved</span>
+            <?php elseif ($latest_st==='Rejected'): ?>
+            <span style="background:#fee2e2;color:#dc2626;padding:2px 10px;border-radius:20px;font-size:.72rem;font-weight:700;">Rejected</span>
+            <?php else: ?>
+            <span style="background:#fff7ed;color:#d97706;padding:2px 10px;border-radius:20px;font-size:.72rem;font-weight:700;">Pending</span>
+            <?php endif; ?>
+            <span style="font-size:.72rem;color:#888;"><?= $attempt_cnt ?> submission<?= $attempt_cnt!==1?'s':'' ?></span>
+          </div>
+        </div>
+
+        <!-- Individual attempts -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;padding:14px;">
+        <?php foreach ($type_docs as $idx => $doc):
           $ai      = !empty($doc['ai_result']) ? json_decode($doc['ai_result'],true) : null;
           $verdict = $ai['is_authentic'] ?? null;
           if ($verdict===true)           { $avc='#16a34a'; $avi='fa-circle-check';    $avl='Authentic'; }
-          elseif ($verdict===false)      { $avc='#dc2626'; $avi='fa-circle-xmark';    $avl='Fake/Altered'; }
+          elseif ($verdict===false)      { $avc='#dc2626'; $avi='fa-circle-xmark';    $avl='Suspicious'; }
           elseif ($verdict==='uncertain'){ $avc='#f59e0b'; $avi='fa-circle-question'; $avl='Uncertain'; }
           else                           { $avc='#aaa';    $avi='fa-robot';           $avl='Not Inspected'; }
-
           $is_img   = in_array(strtolower(pathinfo($doc['file_name'],PATHINFO_EXTENSION)),['jpg','jpeg','png']);
           $file_url = '../requirements/file.php?path=' . urlencode($doc['file_path']);
-
           $badge_sc = $doc['status']==='Approved'?'#22c55e':($doc['status']==='Rejected'?'#ef4444':'#f59e0b');
+          $attempt  = $idx + 1;
         ?>
-        <div style="background:#fff;border:1.5px solid #e8edf4;border-radius:10px;overflow:hidden;">
+        <div style="border:1.5px solid #e8edf4;border-radius:8px;overflow:hidden;">
 
-          <!-- Document thumbnail -->
-          <div style="background:#f8fafc;padding:14px;text-align:center;border-bottom:1px solid #f0f2f5;min-height:80px;display:flex;align-items:center;justify-content:center;">
+          <!-- Attempt header -->
+          <div style="background:#f8fafc;padding:5px 10px;font-size:.68rem;font-weight:700;color:#888;
+                      display:flex;align-items:center;justify-content:space-between;">
+            <span>Attempt #<?= $attempt ?></span>
+            <span style="color:<?= $badge_sc ?>;font-weight:800;"><?= $doc['status'] ?></span>
+          </div>
+
+          <!-- Thumbnail -->
+          <div style="background:#f8fafc;min-height:70px;display:flex;align-items:center;justify-content:center;">
             <?php if ($is_img): ?>
-            <img src="../requirements/file.php?path=<?= urlencode($doc['file_path']) ?>"
-                 alt="document" class="doc-file-thumb"
-                 onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/>
-            <div style="display:none;flex-direction:column;align-items:center;gap:6px;color:#aaa;">
-              <i class="fa-solid fa-image" style="font-size:1.8rem;"></i>
-              <span style="font-size:.72rem;">Preview unavailable</span>
-            </div>
+            <img src="<?= $file_url ?>" alt="doc" style="width:100%;max-height:80px;object-fit:cover;display:block;"
+                 onerror="this.style.display='none'"/>
             <?php else: ?>
-            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;color:#aaa;">
-              <i class="fa-solid fa-file-pdf" style="font-size:2rem;color:#dc2626;"></i>
-              <span style="font-size:.72rem;">PDF Document</span>
-            </div>
+            <i class="fa-solid fa-file-pdf" style="font-size:1.8rem;color:#dc2626;"></i>
             <?php endif; ?>
           </div>
 
-          <!-- Document info -->
-          <div style="padding:14px;">
-            <div style="font-weight:700;font-size:.85rem;color:#1a1a2e;margin-bottom:4px;">
-              <?= htmlspecialchars($doc_type_labels[$doc['document_type']] ?? $doc['document_type']) ?>
+          <!-- Info -->
+          <div style="padding:8px 10px;">
+            <div style="font-size:.7rem;color:#888;margin-bottom:6px;word-break:break-all;line-height:1.3;">
+              <?= htmlspecialchars($doc['file_name']) ?><br>
+              <span style="color:#bbb;"><?= round($doc['file_size']/1024,1) ?> KB · <?= date('M d, Y', strtotime($doc['uploaded_at'])) ?></span>
             </div>
-            <div style="font-size:.72rem;color:#888;margin-bottom:10px;word-break:break-all;">
-              <?= htmlspecialchars($doc['file_name']) ?>
+            <!-- AI verdict -->
+            <div style="font-size:.7rem;color:<?= $avc ?>;font-weight:600;margin-bottom:8px;">
+              <i class="fa-solid <?= $avi ?>"></i> <?= $avl ?>
+              <?php if ($ai && isset($ai['confidence'])): ?>
+              <span style="color:#aaa;font-weight:400;">(<?= $ai['confidence'] ?>%)</span>
+              <?php endif; ?>
             </div>
-
-            <!-- Status + AI row -->
-            <div style="display:flex;align-items:center;justify-content:space-between;
-                        flex-wrap:wrap;gap:6px;margin-bottom:12px;">
-              <span style="font-size:.72rem;font-weight:700;color:<?= $avc ?>;">
-                <i class="fa-solid <?= $avi ?>"></i> <?= $avl ?>
-                <?php if ($ai && isset($ai['confidence'])): ?>
-                <span style="color:#aaa;font-weight:400;">(<?= $ai['confidence'] ?>%)</span>
-                <?php endif; ?>
-              </span>
-              <span style="font-size:.72rem;font-weight:700;padding:2px 10px;
-                           border-radius:20px;background:<?= $badge_sc ?>18;color:<?= $badge_sc ?>;">
-                <?= $doc['status'] ?>
-              </span>
-            </div>
-
             <!-- Actions -->
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
               <a href="<?= $file_url ?>" target="_blank"
-                 class="btn-view-file">
+                 class="btn-view-file" style="font-size:.72rem;padding:5px 10px;">
                 <i class="fa-solid fa-eye"></i> View
               </a>
-              <form method="POST" style="flex:1;display:flex;gap:4px;">
+              <form method="POST" style="display:flex;gap:4px;">
                 <input type="hidden" name="doc_id" value="<?= $doc['id'] ?>"/>
                 <?php if ($doc['status'] !== 'Approved'): ?>
                 <button type="button"
                         class="btn-approve btn-appdoc-apv"
-                        data-doc-id="<?= $doc['id'] ?>" data-pre-reg="<?= $pre_reg_id ?>">
-                  <i class="fa-solid fa-check"></i> Approve
+                        data-doc-id="<?= $doc['id'] ?>" data-pre-reg="<?= $pre_reg_id ?>"
+                        style="font-size:.72rem;padding:5px 8px;">
+                  <i class="fa-solid fa-check"></i>
                 </button>
                 <?php else: ?>
                 <button type="submit" name="new_status" value="Pending"
-                        class="btn-secondary">
+                        class="btn-secondary" style="font-size:.72rem;padding:5px 8px;"
+                        title="Reset to Pending">
                   Reset
                 </button>
                 <?php endif; ?>
                 <?php if ($doc['status'] !== 'Rejected'): ?>
                 <button type="button"
                         class="btn-reject btn-appdoc-rej"
-                        data-doc-id="<?= $doc['id'] ?>" data-pre-reg="<?= $pre_reg_id ?>">
-                  <i class="fa-solid fa-xmark"></i> Reject
+                        data-doc-id="<?= $doc['id'] ?>" data-pre-reg="<?= $pre_reg_id ?>"
+                        style="font-size:.72rem;padding:5px 8px;">
+                  <i class="fa-solid fa-xmark"></i>
                 </button>
                 <?php endif; ?>
               </form>
             </div>
           </div>
-
         </div>
         <?php endforeach; ?>
+        </div><!-- end attempts grid -->
+      </div><!-- end type block -->
+      <?php endforeach; ?>
       </div>
       <?php endif; ?>
     </div>

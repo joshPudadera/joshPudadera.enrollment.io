@@ -3,7 +3,7 @@ session_start();
 require_once __DIR__ . '/../shared/db.php';
 require_enrollment_tables($conn);
 if (empty($_SESSION['user_id'])) { header('Location: ../auth/signin.php'); exit; }
-if ($_SESSION['role'] !== 'admin') { header('Location: ../admin_dashboard/dashboard.php'); exit; }
+if (!is_admin_or_staff()) { header('Location: ../auth/signin.php'); exit; }
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'U', 0, 1));
 
 // ── Handle Auto-Assign POST ──────────────────────────────────
@@ -49,12 +49,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'auto_
         } else {
             // All sections full OR no section exists — create a new one
             // Build next section code: derive prefix from course
-            $words   = explode(' ', $course);
+            // Strip anything in parentheses first, then build acronym from significant words
+            $course_clean = preg_replace('/\(.*?\)/', '', $course); // remove (...) blocks
+            $course_clean = preg_replace('/[^A-Za-z\s]/', '', $course_clean); // keep only letters+spaces
+            $words   = preg_split('/\s+/', trim($course_clean));
             $prefix  = '';
+            $skip_words = ['of','in','and','the','major','a','an'];
             foreach ($words as $w) {
-                if (strlen($w) > 2 && !in_array(strtolower($w), ['of','in','and','the'])) {
+                $wl = strtolower($w);
+                if (strlen($w) > 2 && !in_array($wl, $skip_words)) {
                     $prefix .= strtoupper($w[0]);
                 }
+            }
+            // For very short course codes (e.g. "STEM", "ABM") use the word directly
+            if (strlen($prefix) <= 2) {
+                $prefix = strtoupper(preg_replace('/[^A-Za-z]/', '', $words[0]));
             }
             $prefix = strtoupper($prefix ?: 'SEC') . '-' . substr($year_lv, 0, 1);
 
@@ -265,7 +274,7 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
 
     .modal-overlay { display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);
                      z-index:9999;align-items:center;justify-content:center; }
-    .modal-overlay.show { display:flex; }
+    .modal-overlay.active { display:flex; }
     .modal-box {
       background:#fff;border-radius:14px;padding:28px;
       max-width:480px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,.2);
@@ -620,13 +629,13 @@ function toggleSection(id) {
 // ── Add Section Modal ─────────────────────────────────────────
 var addModal = document.getElementById('addSectionModal');
 document.getElementById('btnAddSection').addEventListener('click', function() {
-    addModal.classList.add('show');
+    addModal.classList.add('active');
 });
 document.getElementById('btnCancelAddSection').addEventListener('click', function() {
-    addModal.classList.remove('show');
+    addModal.classList.remove('active');
 });
 addModal.addEventListener('click', function(e) {
-    if (e.target === addModal) addModal.classList.remove('show');
+    if (e.target === addModal) addModal.classList.remove('active');
 });
 
 // ── Assign single student ─────────────────────────────────────
@@ -673,19 +682,19 @@ var btnAutoAssign   = document.getElementById('btnAutoAssignAll');
 
 if (btnAutoAssign) {
     btnAutoAssign.addEventListener('click', function() {
-        secConfirmModal.classList.add('show');
+        secConfirmModal.classList.add('active');
     });
 }
 
 document.getElementById('secConfirmCancel').addEventListener('click', function() {
-    secConfirmModal.classList.remove('show');
+    secConfirmModal.classList.remove('active');
 });
 secConfirmModal.addEventListener('click', function(e) {
-    if (e.target === secConfirmModal) secConfirmModal.classList.remove('show');
+    if (e.target === secConfirmModal) secConfirmModal.classList.remove('active');
 });
 
 document.getElementById('secConfirmOk').addEventListener('click', function() {
-    secConfirmModal.classList.remove('show');
+    secConfirmModal.classList.remove('active');
     // Submit a form POST to the server for reliable processing
     var form = document.createElement('form');
     form.method = 'POST';

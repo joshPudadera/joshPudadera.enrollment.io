@@ -2,7 +2,7 @@
 session_start();
 require_once __DIR__ . '/../shared/db.php';
 if (empty($_SESSION['user_id']))   { header('Location: ../auth/signin.php'); exit; }
-if ($_SESSION['role'] !== 'admin') { header('Location: ../student_dashboard/dashboard.php'); exit; }
+if (!is_admin_or_staff()) { header('Location: ../auth/signin.php'); exit; }
 
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'A', 0, 1));
 
@@ -306,27 +306,10 @@ function pipeline_badge(array $row): string {
           </span>
           <?php endif; ?>
         </h3>
-        <a href="../enrollment_tab/pre_registration.php" class="btn-add"
-           title="New students come through pre-registration">
-          <i class="fa-solid fa-plus"></i> New Pre-Registration
-        </a>
-      </div>
-
-      <!-- Bulk toolbar -->
-      <div class="bulk-toolbar" id="bulkToolbar">
-        <span class="bulk-count" id="bulkCount">0 selected</span>
-        <div class="bulk-actions">
-          <button class="btn-bulk-delete"   id="btnBulkDelete">
-            <i class="fa-solid fa-trash"></i> Delete Selected
-          </button>
-          <button class="btn-bulk-active"   id="btnBulkActive">Set Active</button>
-          <button class="btn-bulk-inactive" id="btnBulkInactive">Set Inactive</button>
-        </div>
       </div>
 
       <table class="crud-table">
         <thead><tr>
-          <th style="width:38px;"><input type="checkbox" id="checkAll"/></th>
           <th>Name</th>
           <th>Course</th>
           <th>ID Number</th>
@@ -355,7 +338,6 @@ function pipeline_badge(array $row): string {
               $confirmed  = (bool)($row['grade_confirmed'] ?? false);
           ?>
           <tr data-id="<?= $sid ?>">
-            <td><input type="checkbox" class="row-check" value="<?= $sid ?>"/></td>
             <td><?= $full_name ?></td>
             <td style="font-size:.78rem;" title="<?= $course ?>">
               <?= htmlspecialchars(course_abbr($row['course'])) ?>
@@ -407,27 +389,20 @@ function pipeline_badge(array $row): string {
               <span class="badge-<?= strtolower($status) ?>"><?= $status ?></span>
             </td>
             <td class="actions-cell">
-              <button class="btn-icon btn-view" title="View"   data-id="<?= $sid ?>">
+              <button class="btn-icon btn-view" title="View" data-id="<?= $sid ?>">
                 <i class="fa-solid fa-eye" style="color:#22c55e;"></i>
               </button>
-              <button class="btn-icon btn-edit" title="Edit"   data-id="<?= $sid ?>">
+              <button class="btn-icon btn-edit" title="Edit" data-id="<?= $sid ?>">
                 <i class="fa-solid fa-pen-to-square" style="color:#f59e0b;"></i>
-              </button>
-              <button class="btn-icon btn-delete" title="Delete"
-                      data-id="<?= $sid ?>" data-name="<?= $full_name ?>">
-                <i class="fa-solid fa-trash" style="color:#ef4444;"></i>
               </button>
             </td>
           </tr>
           <?php endwhile; else: ?>
-          <tr><td colspan="11" style="text-align:center;padding:32px;color:#aaa;">
+          <tr><td colspan="10" style="text-align:center;padding:32px;color:#aaa;">
             <?php if ($search !== '' || $filter !== '' || $filter_step !== ''): ?>
               No students match your filters.
             <?php else: ?>
-              No validated students yet.
-              <a href="../enrollment_tab/pre_registration.php" style="color:#2563eb;font-weight:600;">
-                Start a pre-registration →
-              </a>
+              No validated students yet. Students appear here after their application is approved.
             <?php endif; ?>
           </td></tr>
           <?php endif; ?>
@@ -530,18 +505,23 @@ function pipeline_badge(array $row): string {
           <div class="form-field full">
             <label>Course</label>
             <input type="text" id="cCourse"  name="course"
-                   placeholder="e.g. BS Information Technology"/>
+                   placeholder="e.g. BS Information Technology"
+                   oninput="loadSections()"/>
             <span class="field-error"></span>
           </div>
           <div class="form-field">
             <label>Year Level</label>
-            <input type="text" id="cYear"    name="year_level"  placeholder="e.g. 1st Year"/>
+            <input type="text" id="cYear"    name="year_level"  placeholder="e.g. 1st Year"
+                   oninput="loadSections()"/>
             <span class="field-error"></span>
           </div>
           <div class="form-field">
             <label>Section</label>
-            <input type="text" id="cSection" name="section"     placeholder="e.g. TBA"/>
-            <span class="field-error"></span>
+            <select id="cSection" name="section">
+              <option value="">Loading sections…</option>
+            </select>
+            <span class="field-error" id="cSectionError"></span>
+            <div id="sectionNote" style="font-size:.72rem;color:#888;margin-top:3px;"></div>
           </div>
           <div class="form-field">
             <label>Phone</label>
@@ -554,38 +534,6 @@ function pipeline_badge(array $row): string {
     <div class="modal-footer modal-footer-split">
       <button class="btn-modal-cancel" data-close="formModal">Cancel</button>
       <button class="btn-modal-submit" id="btnCrudSubmit">Save Changes</button>
-    </div>
-  </div>
-</div>
-
-<!-- Delete Modal -->
-<div class="modal-overlay" id="deleteModal">
-  <div class="modal modal-sm">
-    <div class="modal-body" style="padding:28px 24px 16px;">
-      <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:10px;">Are you sure?</h3>
-      <p style="font-size:.85rem;color:#555;">
-        Delete <strong id="deleteStudentName" style="color:#2563eb;"></strong>?
-      </p>
-    </div>
-    <div class="modal-footer modal-footer-split">
-      <button class="btn-modal-cancel" data-close="deleteModal">Cancel</button>
-      <button class="btn-modal-confirm" id="btnConfirmDelete">Confirm</button>
-    </div>
-  </div>
-</div>
-
-<!-- Bulk Delete Modal -->
-<div class="modal-overlay" id="bulkDeleteModal">
-  <div class="modal modal-sm">
-    <div class="modal-body" style="padding:28px 24px 16px;">
-      <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:10px;">Are you sure?</h3>
-      <p style="font-size:.85rem;color:#555;">
-        Delete <strong id="bulkDeleteCount" style="color:#2563eb;"></strong> student(s)?
-      </p>
-    </div>
-    <div class="modal-footer modal-footer-split">
-      <button class="btn-modal-cancel" data-close="bulkDeleteModal">Cancel</button>
-      <button class="btn-modal-confirm" id="btnConfirmBulkDelete">Confirm</button>
     </div>
   </div>
 </div>
@@ -631,6 +579,64 @@ function pipeline_badge(array $row): string {
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
 <script>
 const STUDENT_API = '../shared/student_actions.php';
+
+// ── Section dropdown loader ────────────────────────────────────
+var _sectionLoadTimer = null;
+function loadSections(currentSection) {
+    clearTimeout(_sectionLoadTimer);
+    _sectionLoadTimer = setTimeout(function() {
+        var courseEl = document.getElementById('cCourse');
+        var sel      = document.getElementById('cSection');
+        var note     = document.getElementById('sectionNote');
+        if (!courseEl || !sel) return;
+
+        var course = courseEl.value.trim();
+
+        // Always show waiting list as first option
+        sel.innerHTML = '<option value="TBA">Place in Waiting List (TBA)</option>';
+        if (note) note.textContent = '';
+
+        if (!course) return;
+
+        sel.innerHTML = '<option value="TBA">Place in Waiting List (TBA)</option>'
+                      + '<option value="" disabled>Loading sections…</option>';
+
+        fetch(STUDENT_API + '?action=get_sections&course=' + encodeURIComponent(course))
+            .then(function(r){ return r.json(); })
+            .then(function(d) {
+                // Reset to just waiting list
+                sel.innerHTML = '<option value="TBA">Place in Waiting List (TBA)</option>';
+
+                if (d.success && d.sections && d.sections.length > 0) {
+                    d.sections.forEach(function(s) {
+                        var full  = parseInt(s.actual_count) >= parseInt(s.max_capacity);
+                        var opt   = document.createElement('option');
+                        opt.value = s.section_code;
+                        opt.textContent = s.section_code
+                            + ' — ' + (s.year_level || '')
+                            + ' (' + s.actual_count + '/' + s.max_capacity + ')'
+                            + (full ? ' FULL' : '');
+                        opt.disabled = full;
+                        sel.appendChild(opt);
+                    });
+                    if (note) note.textContent = d.sections.length + ' section(s) available.';
+                } else {
+                    if (note) note.textContent = 'No sections for this course yet — student will be in Waiting List.';
+                }
+
+                // Pre-select the passed value
+                if (currentSection) {
+                    sel.value = currentSection;
+                    if (!sel.value) sel.value = 'TBA'; // fallback if section code not found
+                }
+            })
+            .catch(function() {
+                sel.innerHTML = '<option value="TBA">Place in Waiting List (TBA)</option>';
+                if (note) note.textContent = 'Could not load sections.';
+                if (currentSection) sel.value = 'TBA';
+            });
+    }, 200);
+}
 </script>
 <script src="../js/dashboard.js"></script>
 </body>

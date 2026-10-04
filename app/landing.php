@@ -178,7 +178,7 @@
 <nav class="top-nav">
   <a class="top-nav-brand" href="landing.php">
     <img src="images/BCP_LOGO.png" alt="BCP Logo"/>
-    <span>BCP Student Portal</span>
+    <span>Enrollment Landing Page</span>
   </a>
   <div class="top-nav-links">
     <a href="#about">About</a>

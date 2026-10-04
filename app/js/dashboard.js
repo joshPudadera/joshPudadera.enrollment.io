@@ -510,9 +510,14 @@ document.querySelectorAll('.btn-edit').forEach(function(btn) {
                 set('cBday',      s.birthday);
                 set('cCourse',    s.course);
                 set('cYear',      s.year_level);
-                set('cSection',   s.section);
-                set('cPhone',     s.phone);
-                set('cStatus',    s.status);
+                set('cPhone',     s.phone);                set('cStatus',    s.status);
+                // Load section dropdown for this student's course then pre-select their current section
+                if (typeof loadSections === 'function') {
+                    loadSections(s.section || 'TBA');
+                } else {
+                    var sec = document.getElementById('cSection');
+                    if (sec) sec.value = s.section || 'TBA';
+                }
                 form.querySelectorAll('.input-error').forEach(function(el) { el.classList.remove('input-error'); });
                 form.querySelectorAll('.form-field.has-error').forEach(function(el) { el.classList.remove('has-error'); });
                 form.querySelectorAll('.field-error').forEach(function(el) { el.textContent = ''; });

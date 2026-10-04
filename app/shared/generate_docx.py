@@ -1,163 +1,52 @@
 """
 generate_docx.py
 ================
-Builds a structured Word document (.docx) from AI-extracted enrollment data.
+Builds a Word admission summary document from all data the student
+submitted in the online enrollment form (stored in pre_registrations).
 
 Called by generate_docx.php:
     python generate_docx.py <payload_json_path> <output_docx_path>
 
-Requires:
-    pip install python-docx
-
-──────────────────────────────────────────────────────────────────────────────
-DOCUMENT TEMPLATE STRUCTURE
-──────────────────────────────────────────────────────────────────────────────
-When you create your Word template in the future, map these fields:
-
-SECTION 1 — APPLICANT INFORMATION
-  TODO: [APPLICANT_REF_NUMBER]       Application reference number
-  TODO: [APPLICANT_FULL_NAME]        Full name (Last, First Middle)
-  TODO: [APPLICANT_FIRST_NAME]       First name
-  TODO: [APPLICANT_LAST_NAME]        Last name
-  TODO: [APPLICANT_MIDDLE_NAME]      Middle name
-  TODO: [APPLICANT_EMAIL]            Email address
-  TODO: [APPLICANT_PHONE]            Phone / mobile number
-  TODO: [APPLICANT_ADDRESS]          Complete home address
-  TODO: [APPLICANT_COURSE]           Course applied for
-  TODO: [APPLICANT_YEAR_LEVEL]       Year level
-  TODO: [APPLICANT_BRANCH]           Campus/branch
-  TODO: [APPLICANT_SUBMITTED_AT]     Date application was submitted
-
-SECTION 2 — BIRTH CERTIFICATE (PSA)
-  TODO: [BC_FULL_NAME]               Full name as on PSA cert
-  TODO: [BC_LAST_NAME]               Last name
-  TODO: [BC_FIRST_NAME]              First name
-  TODO: [BC_MIDDLE_NAME]             Middle name
-  TODO: [BC_DATE_OF_BIRTH]           Date of birth (YYYY-MM-DD)
-  TODO: [BC_PLACE_OF_BIRTH]          Place of birth
-  TODO: [BC_SEX]                     Sex (Male/Female)
-  TODO: [BC_NATIONALITY]             Nationality
-  TODO: [BC_REGISTRATION_NUMBER]     PSA Registry number
-  TODO: [BC_DATE_ISSUED]             Date the cert was issued
-  TODO: [BC_ISSUING_AUTHORITY]       Issuing authority (PSA / civil registrar)
-  TODO: [BC_NAME_OF_MOTHER]          Mother's full maiden name
-  TODO: [BC_NAME_OF_FATHER]          Father's full name
-  TODO: [BC_AI_VERDICT]              AI authenticity verdict
-  TODO: [BC_AI_CONFIDENCE]           AI confidence score (%)
-  TODO: [BC_AI_NOTES]                AI notes / flags
-
-SECTION 3 — REPORT CARD (Form 138)
-  TODO: [RC_FULL_NAME]               Student name on report card
-  TODO: [RC_LRN]                     Learner Reference Number
-  TODO: [RC_SCHOOL_NAME]             School name
-  TODO: [RC_SCHOOL_YEAR]             School year (e.g. 2024-2025)
-  TODO: [RC_GRADE_LEVEL]             Grade level (e.g. Grade 12)
-  TODO: [RC_STRAND_OR_TRACK]         Strand/track (e.g. STEM, ABM)
-  TODO: [RC_GENERAL_AVERAGE]         Final general average
-  TODO: [RC_CLASS_ADVISER]           Class adviser name
-  TODO: [RC_PRINCIPAL]               School principal name
-  TODO: [RC_DATE_ISSUED]             Date issued
-  TODO: [RC_ISSUING_AUTHORITY]       Issuing school + principal
-  TODO: [RC_AI_VERDICT]              AI authenticity verdict
-  TODO: [RC_AI_CONFIDENCE]           AI confidence score (%)
-  TODO: [RC_AI_NOTES]                AI notes / flags
-
-SECTION 4 — GOOD MORAL CERTIFICATE
-  TODO: [GM_FULL_NAME]               Recipient full name
-  TODO: [GM_ISSUING_SCHOOL]          School / institution that issued it
-  TODO: [GM_ISSUING_AUTHORITY]       Signatory name + position
-  TODO: [GM_DATE_ISSUED]             Date issued
-  TODO: [GM_PURPOSE]                 Stated purpose (e.g. "for college enrollment")
-  TODO: [GM_YEAR_GRADUATED]          Year graduated / SY covered
-  TODO: [GM_AI_VERDICT]              AI authenticity verdict
-  TODO: [GM_AI_CONFIDENCE]           AI confidence score (%)
-  TODO: [GM_AI_NOTES]                AI notes / flags
-
-SECTION 5 — DOCUMENT STATUSES
-  TODO: [STATUS_BIRTH_CERTIFICATE]   Admin approval status
-  TODO: [STATUS_REPORT_CARD]         Admin approval status
-  TODO: [STATUS_GOOD_MORAL]          Admin approval status
-
-SECTION 6 — GENERATION META
-  TODO: [GENERATED_AT]               Timestamp this document was generated
-  TODO: [GENERATED_BY]               Admin who triggered generation
-──────────────────────────────────────────────────────────────────────────────
+Requires: pip install python-docx
 """
 
 import sys
 import json
 import os
-from datetime import datetime
 
 try:
     from docx import Document
-    from docx.shared import Pt, RGBColor, Inches, Cm
+    from docx.shared import Pt, RGBColor, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+    from docx.enum.table import WD_TABLE_ALIGNMENT
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
 except ImportError:
-    print("ERROR: python-docx is not installed. Run:  pip install python-docx", file=sys.stderr)
+    print("ERROR: python-docx not installed. Run: pip install python-docx", file=sys.stderr)
     sys.exit(1)
 
 
-# ── Colour palette (matches the BCP blue theme) ───────────────
-BLUE_DARK   = RGBColor(0x1a, 0x3a, 0x8c)   # #1a3a8c
-BLUE_MID    = RGBColor(0x25, 0x63, 0xeb)   # #2563eb
-BLUE_LIGHT  = RGBColor(0xef, 0xf6, 0xff)   # #eff6ff (table header bg)
-GREEN       = RGBColor(0x16, 0xa3, 0x4a)   # #16a34a
-RED         = RGBColor(0xdc, 0x26, 0x26)   # #dc2626
-AMBER       = RGBColor(0xd9, 0x77, 0x06)   # #d97706
-GREY_TEXT   = RGBColor(0x55, 0x55, 0x55)   # #555
-GREY_LIGHT  = RGBColor(0x88, 0x88, 0x88)   # #888
+# ── Colours ───────────────────────────────────────────────────
+BLUE  = RGBColor(0x1a, 0x3a, 0x8c)
+DARK  = RGBColor(0x1a, 0x1a, 0x2e)
+GREY  = RGBColor(0x55, 0x55, 0x55)
+LIGHT = RGBColor(0x88, 0x88, 0x88)
 
 
-# ═══════════════════════════════════════════════════════════════
-#  HELPERS
-# ═══════════════════════════════════════════════════════════════
-
-def val(data: dict, *keys, default='—') -> str:
-    """Safely pull a nested value from a dict; return default if missing/None."""
-    for key in keys:
+def v(data: dict, *keys) -> str:
+    """Safely get a nested value, return em-dash if missing/empty."""
+    for k in keys:
         if isinstance(data, dict):
-            data = data.get(key)
+            data = data.get(k)
         else:
-            return default
-    return str(data).strip() if data else default
+            return '—'
+    return str(data).strip() if data else '—'
 
 
-def verdict_label(ai_data: dict) -> tuple[str, RGBColor]:
-    """Return (label, colour) for an AI authenticity verdict."""
-    v = ai_data.get('is_authentic')
-    if v is True:
-        return '✓ Authentic', GREEN
-    if v is False:
-        return '✗ Suspicious / Possibly Fake', RED
-    return '? Uncertain', AMBER
-
-
-def set_cell_bg(cell, hex_color: str):
-    """Set table cell background colour."""
-    tc   = cell._tc
-    tcPr = tc.get_or_add_tcPr()
-    shd  = OxmlElement('w:shd')
-    shd.set(qn('w:val'),   'clear')
-    shd.set(qn('w:color'), 'auto')
-    shd.set(qn('w:fill'),  hex_color)
-    tcPr.append(shd)
-
-
-def add_section_heading(doc: Document, title: str, icon: str = ''):
-    """Add a bold blue section heading with a bottom border."""
+def hr(doc):
     p    = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(14)
+    p.paragraph_format.space_before = Pt(4)
     p.paragraph_format.space_after  = Pt(4)
-    run  = p.add_run((icon + '  ' + title).strip())
-    run.bold      = True
-    run.font.size = Pt(11)
-    run.font.color.rgb = BLUE_DARK
-
-    # Bottom border on the paragraph
     pPr  = p._p.get_or_add_pPr()
     pBdr = OxmlElement('w:pBdr')
     bot  = OxmlElement('w:bottom')
@@ -167,357 +56,178 @@ def add_section_heading(doc: Document, title: str, icon: str = ''):
     bot.set(qn('w:color'), '1a3a8c')
     pBdr.append(bot)
     pPr.append(pBdr)
-    return p
 
 
-def add_field_table(doc: Document, fields: list[tuple[str, str]]):
-    """
-    Render a two-column label/value table.
-    fields = [(label, value), ...]
-    """
-    table = doc.add_table(rows=0, cols=2)
-    table.style = 'Table Grid'
-    table.alignment = WD_TABLE_ALIGNMENT.LEFT
+def section_heading(doc, title: str):
+    hr(doc)
+    p   = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(8)
+    p.paragraph_format.space_after  = Pt(6)
+    r   = p.add_run(title.upper())
+    r.bold           = True
+    r.font.size      = Pt(9.5)
+    r.font.color.rgb = BLUE
 
-    # Column widths
-    for row_data in fields:
-        row   = table.add_row()
-        label_cell = row.cells[0]
-        value_cell = row.cells[1]
 
+def field_table(doc, rows: list):
+    """Add a two-column label/value table."""
+    tbl = doc.add_table(rows=0, cols=2)
+    tbl.style     = 'Table Grid'
+    tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+    for label, value in rows:
+        row = tbl.add_row()
         # Label cell
-        set_cell_bg(label_cell, 'f1f5f9')
-        label_cell.width = Cm(5.5)
-        lp   = label_cell.paragraphs[0]
-        lp.paragraph_format.space_before = Pt(3)
-        lp.paragraph_format.space_after  = Pt(3)
-        lr   = lp.add_run(row_data[0])
+        lc = row.cells[0]
+        lc.width = Cm(5)
+        lp = lc.paragraphs[0]
+        lp.paragraph_format.space_before = Pt(2)
+        lp.paragraph_format.space_after  = Pt(2)
+        lr = lp.add_run(label)
         lr.bold           = True
         lr.font.size      = Pt(8.5)
-        lr.font.color.rgb = GREY_TEXT
-
+        lr.font.color.rgb = GREY
         # Value cell
-        value_cell.width = Cm(11)
-        vp   = value_cell.paragraphs[0]
-        vp.paragraph_format.space_before = Pt(3)
-        vp.paragraph_format.space_after  = Pt(3)
-        vr   = vp.add_run(row_data[1])
+        vc = row.cells[1]
+        vp = vc.paragraphs[0]
+        vp.paragraph_format.space_before = Pt(2)
+        vp.paragraph_format.space_after  = Pt(2)
+        vr = vp.add_run(value)
         vr.font.size      = Pt(9)
-        vr.font.color.rgb = RGBColor(0x1a, 0x1a, 0x2e)
-
-    return table
+        vr.font.color.rgb = DARK if value != '—' else LIGHT
 
 
-def add_ai_verdict_block(doc: Document, ai_data: dict):
-    """Add a compact AI verdict + notes + red flags block."""
-    label, colour = verdict_label(ai_data)
-    conf          = ai_data.get('confidence', 0)
-    notes         = ai_data.get('notes', '') or ai_data.get('authenticity_notes', '')
-    flags         = ai_data.get('red_flags', [])
-    inspected     = ai_data.get('inspected_at', '')
-
-    # Verdict line
-    p = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(6)
-    p.paragraph_format.space_after  = Pt(2)
-    r = p.add_run(f'AI Verdict:  {label}   ({conf}% confidence)')
-    r.bold            = True
-    r.font.size       = Pt(9)
-    r.font.color.rgb  = colour
-
-    if inspected:
-        p2 = doc.add_paragraph()
-        p2.paragraph_format.space_before = Pt(0)
-        p2.paragraph_format.space_after  = Pt(2)
-        r2 = p2.add_run(f'Inspected at: {inspected}')
-        r2.font.size      = Pt(7.5)
-        r2.font.color.rgb = GREY_LIGHT
-
-    if notes:
-        p3 = doc.add_paragraph()
-        p3.paragraph_format.space_before = Pt(2)
-        p3.paragraph_format.space_after  = Pt(2)
-        r3l = p3.add_run('Notes: ')
-        r3l.bold           = True
-        r3l.font.size      = Pt(8.5)
-        r3l.font.color.rgb = GREY_TEXT
-        r3v = p3.add_run(notes)
-        r3v.font.size      = Pt(8.5)
-        r3v.font.color.rgb = GREY_TEXT
-
-    if flags:
-        pf = doc.add_paragraph()
-        pf.paragraph_format.space_before = Pt(2)
-        pf.paragraph_format.space_after  = Pt(2)
-        rf = pf.add_run('Red Flags:')
-        rf.bold            = True
-        rf.font.size       = Pt(8.5)
-        rf.font.color.rgb  = RED
-        for flag in flags:
-            pfi = doc.add_paragraph(style='List Bullet')
-            pfi.paragraph_format.left_indent = Cm(1)
-            rfi = pfi.add_run(flag)
-            rfi.font.size      = Pt(8.5)
-            rfi.font.color.rgb = RED
-
-
-# ═══════════════════════════════════════════════════════════════
-#  DOCUMENT BUILDER
-# ═══════════════════════════════════════════════════════════════
-
-def build_document(payload: dict, output_path: str):
+def build(payload: dict, output_path: str):
     doc = Document()
 
     # ── Page margins ─────────────────────────────────────────
-    for section in doc.sections:
-        section.top_margin    = Cm(2.0)
-        section.bottom_margin = Cm(2.0)
-        section.left_margin   = Cm(2.5)
-        section.right_margin  = Cm(2.5)
+    for sec in doc.sections:
+        sec.top_margin    = Cm(2.0)
+        sec.bottom_margin = Cm(2.0)
+        sec.left_margin   = Cm(2.5)
+        sec.right_margin  = Cm(2.5)
 
-    applicant = payload.get('applicant', {})
-    bc        = payload.get('birth_certificate', {})
-    rc        = payload.get('report_card', {})
-    gm        = payload.get('good_moral', {})
-    statuses  = payload.get('statuses', {})
-    meta      = {
-        'generated_at': payload.get('generated_at', ''),
-        'generated_by': payload.get('generated_by', ''),
-    }
+    a   = payload.get('applicant', {})
+    meta = payload
 
-    # ── Resolve best full name (prefer AI from birth cert) ────
-    full_name = (
-        val(bc, 'full_name', default='') or
-        f"{val(applicant,'last_name',default='')} {val(applicant,'first_name',default='')} {val(applicant,'middle_name',default='')}".strip()
-        or '—'
+    # ── Header ───────────────────────────────────────────────
+    t = doc.add_paragraph()
+    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    t.paragraph_format.space_after = Pt(2)
+    tr = t.add_run('BESTLINK COLLEGE OF THE PHILIPPINES')
+    tr.bold = True; tr.font.size = Pt(14); tr.font.color.rgb = BLUE
+
+    s = doc.add_paragraph()
+    s.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    s.paragraph_format.space_after = Pt(2)
+    sr = s.add_run('Office of the Registrar — Student Admission Summary')
+    sr.font.size = Pt(10); sr.font.color.rgb = BLUE
+
+    m = doc.add_paragraph()
+    m.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    m.paragraph_format.space_after = Pt(10)
+    mr = m.add_run(
+        f"Generated: {meta.get('generated_at','')}   |   By: {meta.get('generated_by','')}"
     )
+    mr.font.size = Pt(8); mr.font.color.rgb = LIGHT
 
-    # ════════════════════════════════════════════════════════
-    #  HEADER
-    # ════════════════════════════════════════════════════════
-    title_p = doc.add_paragraph()
-    title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title_p.paragraph_format.space_after = Pt(2)
-    tr = title_p.add_run('BULACAN CHRISTIAN POLYTECHNIC COLLEGE')
-    tr.bold            = True
-    tr.font.size       = Pt(14)
-    tr.font.color.rgb  = BLUE_DARK
-
-    sub_p = doc.add_paragraph()
-    sub_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    sub_p.paragraph_format.space_after = Pt(2)
-    sr = sub_p.add_run('Office of the Registrar — Admission Document Summary')
-    sr.font.size      = Pt(10)
-    sr.font.color.rgb = BLUE_MID
-
-    date_p = doc.add_paragraph()
-    date_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    date_p.paragraph_format.space_after = Pt(10)
-    dr = date_p.add_run(f'Generated: {meta["generated_at"]}   |   By: {meta["generated_by"]}')
-    dr.font.size      = Pt(8)
-    dr.font.color.rgb = GREY_LIGHT
-
-    # Horizontal rule
-    hr = doc.add_paragraph()
-    hr.paragraph_format.space_after = Pt(6)
-    hrPr = hr._p.get_or_add_pPr()
-    hrBdr = OxmlElement('w:pBdr')
-    hrBot = OxmlElement('w:bottom')
-    hrBot.set(qn('w:val'),   'single')
-    hrBot.set(qn('w:sz'),    '6')
-    hrBot.set(qn('w:space'), '1')
-    hrBot.set(qn('w:color'), '1a3a8c')
-    hrBdr.append(hrBot)
-    hrPr.append(hrBdr)
-
-    # ════════════════════════════════════════════════════════
-    #  SECTION 1 — APPLICANT INFORMATION
-    # ════════════════════════════════════════════════════════
-    add_section_heading(doc, 'APPLICANT INFORMATION', '1.')
-
-    add_field_table(doc, [
-        # TODO: These pull from pre_registrations. Add missing columns to that table.
-        ('Reference No.',   val(applicant, 'ref_number')),
-        ('Full Name',       full_name),
-        ('Email',           val(applicant, 'email')),
-        ('Phone',           val(applicant, 'phone')),
-        ('Address',         val(applicant, 'address')),
-        # TODO: [APPLICANT_ADDRESS] — add `address` column to pre_registrations
-        ('Course Applied',  val(applicant, 'course')),
-        ('Year Level',      val(applicant, 'year_level')),
-        ('Campus / Branch', val(applicant, 'branch')),
-        # TODO: [APPLICANT_BRANCH] — add `branch` column to pre_registrations
-        ('Date Submitted',  val(applicant, 'submitted_at')),
+    # ── 1. Applicant Identity ─────────────────────────────────
+    section_heading(doc, '1. Applicant Identity')
+    full = ' '.join(filter(None, [v(a,'last_name'), v(a,'first_name'), v(a,'middle_name')]))
+    if v(a,'suffix') != '—':
+        full += ' ' + v(a,'suffix')
+    field_table(doc, [
+        ('Reference No.',       v(a, 'ref_number')),
+        ('Full Name',           full if full.strip() and full.strip() != '—' else '—'),
+        ('Last Name',           v(a, 'last_name')),
+        ('First Name',          v(a, 'first_name')),
+        ('Middle Name',         v(a, 'middle_name')),
+        ('Suffix',              v(a, 'suffix')),
+        ('Applicant Type',      v(a, 'applicant_type')),
+        ('Application Status',  v(a, 'status')),
+        ('Date Submitted',      v(a, 'submitted_at')),
     ])
 
-    # ════════════════════════════════════════════════════════
-    #  SECTION 2 — PSA BIRTH CERTIFICATE
-    # ════════════════════════════════════════════════════════
-    add_section_heading(doc, 'PSA BIRTH CERTIFICATE', '2.')
-
-    # Document status badge
-    bc_status = statuses.get('BirthCertificate', 'Pending')
-    sp = doc.add_paragraph()
-    sp.paragraph_format.space_before = Pt(2)
-    sp.paragraph_format.space_after  = Pt(4)
-    sr2 = sp.add_run(f'Admin Status: {bc_status}')
-    sr2.bold           = True
-    sr2.font.size      = Pt(9)
-    sr2.font.color.rgb = GREEN if bc_status == 'Approved' else (RED if bc_status == 'Rejected' else AMBER)
-
-    add_field_table(doc, [
-        ('Full Name',            val(bc, 'full_name')),
-        ('Last Name',            val(bc, 'last_name')),
-        ('First Name',           val(bc, 'first_name')),
-        ('Middle Name',          val(bc, 'middle_name')),
-        ('Date of Birth',        val(bc, 'date_of_birth')),
-        ('Place of Birth',       val(bc, 'place_of_birth')),
-        ('Sex',                  val(bc, 'sex')),
-        ('Nationality',          val(bc, 'nationality')),
-        ('PSA Registry No.',     val(bc, 'registration_number')),
-        ('Date Issued',          val(bc, 'date_issued')),
-        ('Issuing Authority',    val(bc, 'issuing_authority')),
-        ("Mother's Name",        val(bc, 'name_of_mother')),
-        ("Father's Name",        val(bc, 'name_of_father')),
-        # TODO: [BC_NAME_OF_MOTHER] / [BC_NAME_OF_FATHER] — fill in your template here
+    # ── 2. Personal Details ───────────────────────────────────
+    section_heading(doc, '2. Personal Details')
+    field_table(doc, [
+        ('Date of Birth',   v(a, 'birthday')),
+        ('Sex',             v(a, 'sex')),
+        ('Civil Status',    v(a, 'civil_status')),
+        ('Nationality',     v(a, 'nationality')),
+        ('Religion',        v(a, 'religion')),
+        ('Place of Birth',  v(a, 'place_of_birth')),
     ])
 
-    add_ai_verdict_block(doc, bc)
-
-    # ════════════════════════════════════════════════════════
-    #  SECTION 3 — REPORT CARD (Form 138)
-    # ════════════════════════════════════════════════════════
-    add_section_heading(doc, 'REPORT CARD (Form 138)', '3.')
-
-    rc_status = statuses.get('ReportCard', 'Pending')
-    sp3 = doc.add_paragraph()
-    sp3.paragraph_format.space_before = Pt(2)
-    sp3.paragraph_format.space_after  = Pt(4)
-    sr3 = sp3.add_run(f'Admin Status: {rc_status}')
-    sr3.bold           = True
-    sr3.font.size      = Pt(9)
-    sr3.font.color.rgb = GREEN if rc_status == 'Approved' else (RED if rc_status == 'Rejected' else AMBER)
-
-    add_field_table(doc, [
-        ('Student Name',          val(rc, 'full_name')),
-        ('Last Name',             val(rc, 'last_name')),
-        ('First Name',            val(rc, 'first_name')),
-        ('Middle Name',           val(rc, 'middle_name')),
-        ('LRN',                   val(rc, 'lrn')),
-        # TODO: [RC_LRN] — cross-check with DepEd LIS if possible
-        ('School Name',           val(rc, 'school_name')),
-        ('School Year',           val(rc, 'school_year')),
-        ('Grade Level',           val(rc, 'grade_level')),
-        ('Strand / Track',        val(rc, 'strand_or_track')),
-        ('General Average',       val(rc, 'general_average')),
-        ('Class Adviser',         val(rc, 'class_adviser')),
-        ('School Principal',      val(rc, 'principal')),
-        ('Date Issued',           val(rc, 'date_issued')),
-        ('Issuing Authority',     val(rc, 'issuing_authority')),
+    # ── 3. Contact Information ────────────────────────────────
+    section_heading(doc, '3. Contact Information')
+    field_table(doc, [
+        ('Email Address',   v(a, 'email')),
+        ('Mobile Number',   v(a, 'phone')),
+        ('Home Address',    v(a, 'address')),
     ])
 
-    add_ai_verdict_block(doc, rc)
-
-    # ════════════════════════════════════════════════════════
-    #  SECTION 4 — GOOD MORAL CERTIFICATE
-    # ════════════════════════════════════════════════════════
-    add_section_heading(doc, 'CERTIFICATE OF GOOD MORAL CHARACTER', '4.')
-
-    gm_status = statuses.get('GoodMoral', 'Pending')
-    sp4 = doc.add_paragraph()
-    sp4.paragraph_format.space_before = Pt(2)
-    sp4.paragraph_format.space_after  = Pt(4)
-    sr4 = sp4.add_run(f'Admin Status: {gm_status}')
-    sr4.bold           = True
-    sr4.font.size      = Pt(9)
-    sr4.font.color.rgb = GREEN if gm_status == 'Approved' else (RED if gm_status == 'Rejected' else AMBER)
-
-    add_field_table(doc, [
-        ('Recipient Name',        val(gm, 'full_name')),
-        ('Last Name',             val(gm, 'last_name')),
-        ('First Name',            val(gm, 'first_name')),
-        ('Middle Name',           val(gm, 'middle_name')),
-        ('Issuing School',        val(gm, 'issuing_school')),
-        # TODO: [GM_ISSUING_SCHOOL] — verify against school accreditation records
-        ('Signatory / Position',  val(gm, 'issuing_authority')),
-        ('Date Issued',           val(gm, 'date_issued')),
-        ('Purpose',               val(gm, 'purpose')),
-        ('Year Graduated / SY',   val(gm, 'year_graduated')),
+    # ── 4. Academic Information ───────────────────────────────
+    section_heading(doc, '4. Academic Information')
+    field_table(doc, [
+        ('Campus / Branch',      v(a, 'branch')),
+        ('Course',               v(a, 'course')),
+        ('Year Level',           v(a, 'year_level')),
+        ('Transfer Year Level',  v(a, 'transfer_year_level')),
+        ('Previous School',      v(a, 'prev_school')),
+        ('School Year Graduated',v(a, 'grad_year')),
     ])
 
-    add_ai_verdict_block(doc, gm)
+    # ── 5. Emergency Contact ──────────────────────────────────
+    section_heading(doc, '5. Emergency Contact')
+    field_table(doc, [
+        ('Contact Person',  v(a, 'emergency_name')),
+        ('Relationship',    v(a, 'emergency_relation')),
+        ('Contact Number',  v(a, 'emergency_phone')),
+    ])
 
-    # ════════════════════════════════════════════════════════
-    #  SECTION 5 — DOCUMENT STATUS SUMMARY
-    # ════════════════════════════════════════════════════════
-    add_section_heading(doc, 'DOCUMENT STATUS SUMMARY', '5.')
+    # ── 6. Submitted Documents ────────────────────────────────
+    section_heading(doc, '6. Submitted Documents')
+    docs_list = payload.get('documents', [])
+    if docs_list:
+        tbl = doc.add_table(rows=1, cols=4)
+        tbl.style     = 'Table Grid'
+        tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+        hdr = tbl.rows[0].cells
+        for i, h in enumerate(['Document Type', 'File Name', 'Status', 'Uploaded']):
+            p = hdr[i].paragraphs[0]
+            r = p.add_run(h)
+            r.bold = True; r.font.size = Pt(8.5); r.font.color.rgb = BLUE
+        for d in docs_list:
+            row  = tbl.add_row()
+            vals = [
+                d.get('document_type', '—'),
+                d.get('file_name', '—'),
+                d.get('status', '—'),
+                d.get('uploaded_at', '—')[:10] if d.get('uploaded_at') else '—',
+            ]
+            for i, val in enumerate(vals):
+                p = row.cells[i].paragraphs[0]
+                r = p.add_run(str(val))
+                r.font.size = Pt(8.5)
+    else:
+        p = doc.add_paragraph()
+        r = p.add_run('No documents uploaded yet.')
+        r.font.size = Pt(9); r.font.color.rgb = LIGHT
 
-    summary_rows = [
-        ('PSA Birth Certificate',           statuses.get('BirthCertificate', 'Not Submitted')),
-        ('Report Card (Form 138)',           statuses.get('ReportCard',       'Not Submitted')),
-        ('Good Moral Certificate',           statuses.get('GoodMoral',        'Not Submitted')),
-    ]
-
-    # TODO: Add more required document rows here as your checklist grows.
-    # e.g. ('Medical Certificate', statuses.get('MedicalCert', 'Not Submitted'))
-
-    table = doc.add_table(rows=1, cols=3)
-    table.style = 'Table Grid'
-    table.alignment = WD_TABLE_ALIGNMENT.LEFT
-
-    # Header row
-    hdr_cells = table.rows[0].cells
-    for i, hdr in enumerate(['Document', 'Admin Status', 'Notes']):
-        set_cell_bg(hdr_cells[i], '1a3a8c')
-        p  = hdr_cells[i].paragraphs[0]
-        r  = p.add_run(hdr)
-        r.bold           = True
-        r.font.size      = Pt(9)
-        r.font.color.rgb = RGBColor(0xff, 0xff, 0xff)
-
-    for doc_name, status in summary_rows:
-        row   = table.add_row()
-        cells = row.cells
-        cells[0].paragraphs[0].add_run(doc_name).font.size = Pt(9)
-        sr    = cells[1].paragraphs[0].add_run(status)
-        sr.font.size = Pt(9)
-        sr.bold      = True
-        sr.font.color.rgb = (GREEN if status == 'Approved'
-                              else RED if status == 'Rejected'
-                              else AMBER)
-        # TODO: [NOTES_COL] — add admin remarks per document if needed
-        cells[2].paragraphs[0].add_run('').font.size = Pt(9)
-
-    # ════════════════════════════════════════════════════════
-    #  FOOTER NOTE
-    # ════════════════════════════════════════════════════════
+    # ── Footer note ───────────────────────────────────────────
     doc.add_paragraph()
     fn = doc.add_paragraph()
     fn.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    fn.paragraph_format.space_before = Pt(16)
+    fn.paragraph_format.space_before = Pt(14)
     fr = fn.add_run(
         'This document was system-generated by the BCP Enrollment Management System. '
-        'All extracted data was analyzed by OpenAI GPT-4o. '
-        'Original documents must be presented upon enrollment for manual verification.'
+        'All information was provided by the applicant during the online admission process.'
     )
-    fr.font.size      = Pt(7.5)
-    fr.font.color.rgb = GREY_LIGHT
-    fr.italic         = True
+    fr.font.size = Pt(7.5); fr.font.color.rgb = LIGHT; fr.italic = True
 
-    # TODO: Add a signature block here for the Registrar once you have the template.
-    # e.g.:
-    #   Verified by: ____________________________
-    #   Registrar, BCP
-    #   Date: __________________
-
-    # ── Save ─────────────────────────────────────────────────
     doc.save(output_path)
-    print(f'OK: Document saved to {output_path}')
+    print(f'OK: {output_path}')
 
-
-# ═══════════════════════════════════════════════════════════════
-#  ENTRY POINT
-# ═══════════════════════════════════════════════════════════════
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
@@ -528,10 +238,10 @@ if __name__ == '__main__':
     output_path = sys.argv[2]
 
     if not os.path.exists(json_path):
-        print(f'ERROR: Payload file not found: {json_path}', file=sys.stderr)
+        print(f'Payload not found: {json_path}', file=sys.stderr)
         sys.exit(1)
 
-    with open(json_path, 'r', encoding='utf-8-sig') as f:   # utf-8-sig handles BOM if present
+    with open(json_path, 'r', encoding='utf-8-sig') as f:
         payload = json.load(f)
 
-    build_document(payload, output_path)
+    build(payload, output_path)

@@ -1,55 +1,118 @@
 <?php
 session_start();
-$uploaded = $_SESSION['uploaded_docs'] ?? [];
-if (empty($uploaded)) { header('Location: upload.php'); exit; }
+require_once __DIR__ . '/../shared/db.php';
+
+// ── Load docs from DB (not session — upload.php saves directly to DB now) ──
+$user_id = $_SESSION['user_id'] ?? null;
+if (!$user_id) { header('Location: ../auth/signin.php'); exit; }
+
+$pre_reg_id  = 0;
+$ref_number  = '';
+$pre_reg_name = '';
+
+if (enrollment_tables_exist($conn)) {
+    $r = $conn->prepare(
+        "SELECT id, ref_number, first_name, last_name
+         FROM pre_registrations
+         WHERE user_id = ? ORDER BY submitted_at DESC LIMIT 1"
+    );
+    $r->bind_param('i', $user_id);
+    $r->execute();
+    $pr = $r->get_result()->fetch_assoc();
+    $r->close();
+
+    if ($pr) {
+        $pre_reg_id   = (int)$pr['id'];
+        $ref_number   = $pr['ref_number'] ?? '';
+        $pre_reg_name = trim(($pr['first_name'] ?? '') . ' ' . ($pr['last_name'] ?? ''));
+    }
+}
+
+if (!$pre_reg_id) { header('Location: upload.php'); exit; }
+
+// Fetch all documents for this pre-registration
+$docs = [];
+if (enrollment_tables_exist($conn)) {
+    $res = $conn->query(
+        "SELECT id, document_type, file_name, file_path, file_size,
+                redacted_path, redaction_status, ai_result, ai_inspected_at,
+                extracted_name, extracted_dob, extracted_sex, extracted_citizenship,
+                name_match_status, name_match_notes, status, uploaded_at
+         FROM enrollment_documents
+         WHERE pre_reg_id = $pre_reg_id
+         ORDER BY uploaded_at ASC"
+    );
+    if ($res) while ($row = $res->fetch_assoc()) $docs[] = $row;
+}
+
+if (empty($docs)) { header('Location: upload.php'); exit; }
+
+$conn->close();
 
 $current_step = 3;
 include __DIR__ . '/header.php';
 
-$doc_types = [
-    'Form138'            => 'Form 138 (Report Card)',
-    'Form137'            => 'Form 137',
-    'GoodMoral'          => 'Certificate of Good Moral Character',
-    'BirthCertificate'   => 'PSA Birth Certificate',
-    'IDPhoto'            => 'ID Photo',
-    'BarangayClearance'  => 'Barangay Clearance',
-    'TranscriptOfRecords'=> 'Transcript of Records',
-    'HonorableDismissal' => 'Honorable Dismissal',
-    'NCEEResult'         => 'NCAE Result',
-    'ESCCertificate'     => 'ESC Certificate',
-    'Diploma'            => 'Photocopy of Diploma',
-    'Other'              => 'Other Document',
+$doc_type_labels = [
+    'BirthCertificate' => 'PSA Birth Certificate',
+    'ReportCard'       => 'Report Card (Form 138)',
+    'GoodMoral'        => 'Certificate of Good Moral Character',
+    'Form137'          => 'Form 137',
+    'IDPhoto'          => 'ID Photo',
+    'Other'            => 'Other Document',
 ];
 
-$total_size   = array_sum(array_column($uploaded, 'file_size'));
-$inspected    = count(array_filter($uploaded, fn($d) => !empty($d['ai_result'])));
-$all_passed   = $inspected > 0 && count(array_filter($uploaded, fn($d) => ($d['ai_result']['is_authentic'] ?? null) === false)) === 0;
+$total_size   = array_sum(array_column($docs, 'file_size'));
+$ai_done      = count(array_filter($docs, fn($d) => !empty($d['ai_result'])));
+$redacted_ok  = count(array_filter($docs, fn($d) => ($d['redaction_status'] ?? '') === 'done'));
+$mismatches   = array_filter($docs, fn($d) => ($d['name_match_status'] ?? '') === 'mismatch');
+$mismatch_cnt = count($mismatches);
 ?>
 
 <div class="enroll-body">
   <div class="enroll-card">
 
-    <h2 class="enroll-card-title">Review Your Uploads</h2>
+    <h2 class="enroll-card-title">Review Your Documents</h2>
     <p style="text-align:center;font-size:.82rem;color:#666;margin-bottom:24px;">
-      Confirm the documents below are correct before submitting.
-      Go back to add more, inspect with AI, or delete files.
+      These are the documents saved under your application.
+      Go back to upload more, or submit now.
     </p>
 
-    <!-- Summary row -->
-    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:24px;">
-      <div style="flex:1;min-width:120px;background:#eff6ff;border-radius:10px;padding:16px 20px;text-align:center;">
-        <div style="font-size:1.8rem;font-weight:700;color:#2563eb;"><?= count($uploaded) ?></div>
-        <div style="font-size:.75rem;color:#555;margin-top:4px;">Documents</div>
+    <!-- Summary stat cards -->
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:24px;">
+      <div style="flex:1;min-width:110px;background:#eff6ff;border-radius:10px;padding:14px 18px;text-align:center;">
+        <div style="font-size:1.8rem;font-weight:700;color:#2563eb;"><?= count($docs) ?></div>
+        <div style="font-size:.72rem;color:#555;margin-top:3px;">Documents</div>
       </div>
-      <div style="flex:1;min-width:120px;background:#f0fdf4;border-radius:10px;padding:16px 20px;text-align:center;">
-        <div style="font-size:1.8rem;font-weight:700;color:#16a34a;"><?= round($total_size / 1024, 1) ?> KB</div>
-        <div style="font-size:.75rem;color:#555;margin-top:4px;">Total Size</div>
+      <?php
+      $n_approved = count(array_filter($docs, fn($d) => $d['status'] === 'Approved'));
+      $n_pending  = count(array_filter($docs, fn($d) => $d['status'] === 'Pending'));
+      $n_rejected = count(array_filter($docs, fn($d) => $d['status'] === 'Rejected'));
+      ?>
+      <div style="flex:1;min-width:110px;background:#f0fdf4;border-radius:10px;padding:14px 18px;text-align:center;">
+        <div style="font-size:1.8rem;font-weight:700;color:#16a34a;"><?= $n_approved ?></div>
+        <div style="font-size:.72rem;color:#555;margin-top:3px;">Approved</div>
       </div>
-      <div style="flex:1;min-width:120px;background:<?= $inspected>0?'#f0fdf4':'#f8fafc' ?>;border-radius:10px;padding:16px 20px;text-align:center;">
-        <div style="font-size:1.8rem;font-weight:700;color:<?= $inspected>0?'#16a34a':'#94a3b8' ?>;"><?= $inspected ?>/<?= count($uploaded) ?></div>
-        <div style="font-size:.75rem;color:#555;margin-top:4px;">AI Inspected</div>
+      <div style="flex:1;min-width:110px;background:#fffbeb;border-radius:10px;padding:14px 18px;text-align:center;">
+        <div style="font-size:1.8rem;font-weight:700;color:#d97706;"><?= $n_pending ?></div>
+        <div style="font-size:.72rem;color:#555;margin-top:3px;">Pending</div>
       </div>
+      <?php if ($n_rejected > 0): ?>
+      <div style="flex:1;min-width:110px;background:#fff1f2;border-radius:10px;padding:14px 18px;text-align:center;">
+        <div style="font-size:1.8rem;font-weight:700;color:#dc2626;"><?= $n_rejected ?></div>
+        <div style="font-size:.72rem;color:#dc2626;margin-top:3px;">Rejected</div>
+      </div>
+      <?php endif; ?>
     </div>
+
+    <!-- Reference number banner -->
+    <?php if ($ref_number): ?>
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;
+                padding:10px 16px;margin-bottom:18px;font-size:.82rem;color:#1d4ed8;">
+      <i class="fa-solid fa-hashtag"></i>
+      Application Reference: <strong><?= htmlspecialchars($ref_number) ?></strong>
+      &nbsp;·&nbsp; Applicant: <strong><?= htmlspecialchars($pre_reg_name) ?></strong>
+    </div>
+    <?php endif; ?>
 
     <!-- Document table -->
     <div style="overflow-x:auto;">
@@ -57,91 +120,45 @@ $all_passed   = $inspected > 0 && count(array_filter($uploaded, fn($d) => ($d['a
       <thead style="background:#1a3a8c;color:#fff;">
         <tr>
           <th style="padding:10px 14px;text-align:left;">#</th>
-          <th style="padding:10px 14px;text-align:left;">Document Type</th>
+          <th style="padding:10px 14px;text-align:left;">Document</th>
           <th style="padding:10px 14px;text-align:left;">File</th>
-          <th style="padding:10px 14px;text-align:left;">AI Result</th>
-          <th style="padding:10px 14px;text-align:left;">Extracted Info</th>
-          <th style="padding:10px 14px;text-align:left;">Uploaded</th>
+          <th style="padding:10px 14px;text-align:left;">Status</th>
         </tr>
       </thead>
       <tbody>
-        <?php foreach ($uploaded as $i => $doc):
-          $ai      = $doc['ai_result'] ?? null;
-          $verdict = $ai['is_authentic'] ?? null;
-          $ext_data = $ai['extracted'] ?? [];
+        <?php foreach ($docs as $i => $doc): ?>
+        <tr style="border-bottom:1px solid #f0f2f5;<?= $i % 2 === 0 ? 'background:#fafafa;' : '' ?>">
+          <td style="padding:10px 14px;color:#aaa;"><?= $i + 1 ?></td>
 
-          if ($verdict === true)          { $vc='#16a34a'; $vi='fa-circle-check';    $vl='Authentic'; $conf=$ai['confidence']??0; }
-          elseif ($verdict === false)     { $vc='#dc2626'; $vi='fa-circle-xmark';    $vl='Fake/Altered'; $conf=$ai['confidence']??0; }
-          elseif ($verdict==='uncertain') { $vc='#f59e0b'; $vi='fa-circle-question'; $vl='Uncertain'; $conf=$ai['confidence']??0; }
-          else                            { $vc='#94a3b8'; $vi='fa-robot';           $vl='Not Inspected'; $conf=0; }
-        ?>
-        <tr style="border-bottom:1px solid #f0f2f5;<?= $i%2===0?'background:#fafafa;':'' ?>">
-          <td style="padding:10px 14px;color:#aaa;"><?= $i+1 ?></td>
-
+          <!-- Document type -->
           <td style="padding:10px 14px;font-weight:600;color:#1a1a2e;">
             <i class="fa-solid fa-file-lines" style="color:#2563eb;margin-right:6px;"></i>
-            <?= htmlspecialchars($doc_types[$doc['type']] ?? $doc['type']) ?>
+            <?= htmlspecialchars($doc_type_labels[$doc['document_type']] ?? $doc['document_type']) ?>
           </td>
 
-          <td style="padding:10px 14px;color:#555;font-size:.75rem;max-width:160px;
+          <!-- File -->
+          <td style="padding:10px 14px;font-size:.75rem;color:#555;max-width:160px;
                      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
             <?= htmlspecialchars($doc['file_name']) ?><br>
-            <span style="color:#aaa;"><?= round($doc['file_size']/1024,1) ?> KB</span>
+            <span style="color:#aaa;"><?= round($doc['file_size'] / 1024, 1) ?> KB</span><br>
+            <span style="color:#bbb;font-size:.68rem;"><?= date('M d, g:i A', strtotime($doc['uploaded_at'])) ?></span>
           </td>
 
+          <!-- Admin review status -->
           <td style="padding:10px 14px;">
-            <span style="font-size:.75rem;color:<?= $vc ?>;font-weight:700;
-                         display:inline-flex;align-items:center;gap:5px;">
-              <i class="fa-solid <?= $vi ?>"></i> <?= $vl ?>
+            <?php
+            $st  = $doc['status'];
+            $stc = match($st){ 'Approved'=>'#16a34a','Rejected'=>'#dc2626',default=>'#d97706' };
+            $sti = match($st){ 'Approved'=>'fa-circle-check','Rejected'=>'fa-circle-xmark',default=>'fa-clock' };
+            ?>
+            <span style="color:<?= $stc ?>;font-size:.82rem;font-weight:700;display:flex;align-items:center;gap:5px;">
+              <i class="fa-solid <?= $sti ?>"></i> <?= htmlspecialchars($st) ?>
             </span>
-            <?php if ($conf > 0): ?>
-            <div style="margin-top:4px;font-size:.68rem;color:#aaa;"><?= $conf ?>% confidence</div>
-            <?php endif; ?>
-            <?php if (!empty($ai['red_flags'])): ?>
-            <div style="margin-top:4px;">
-              <?php foreach ($ai['red_flags'] as $flag): ?>
-              <div style="font-size:.68rem;color:#dc2626;background:#fff1f2;
-                          border-radius:4px;padding:2px 7px;margin-top:2px;display:inline-block;">
-                <i class="fa-solid fa-xmark"></i> <?= htmlspecialchars($flag) ?>
-              </div>
-              <?php endforeach; ?>
+            <?php if ($st === 'Rejected'): ?>
+            <div style="font-size:.72rem;color:#dc2626;margin-top:3px;">
+              Please upload a new copy in the Upload page.
             </div>
             <?php endif; ?>
-          </td>
-
-          <td style="padding:10px 14px;">
-            <?php if (!empty($ext_data)): ?>
-            <div style="font-size:.75rem;color:#1a1a2e;line-height:1.9;">
-              <?php if (!empty($ext_data['full_name'])): ?>
-              <div><span style="color:#aaa;font-size:.68rem;">NAME</span><br>
-                <strong><?= htmlspecialchars($ext_data['full_name']) ?></strong></div>
-              <?php endif; ?>
-              <?php if (!empty($ext_data['date_of_birth'])): ?>
-              <div><span style="color:#aaa;font-size:.68rem;">BIRTHDAY</span><br>
-                <?= htmlspecialchars($ext_data['date_of_birth']) ?></div>
-              <?php endif; ?>
-              <?php if (!empty($ext_data['sex'])): ?>
-              <div><span style="color:#aaa;font-size:.68rem;">SEX</span><br>
-                <?= htmlspecialchars($ext_data['sex']) ?></div>
-              <?php endif; ?>
-              <?php if (!empty($ext_data['place_of_birth'])): ?>
-              <div><span style="color:#aaa;font-size:.68rem;">PLACE OF BIRTH</span><br>
-                <?= htmlspecialchars($ext_data['place_of_birth']) ?></div>
-              <?php endif; ?>
-              <?php if (!empty($ext_data['registration_number'])): ?>
-              <div><span style="color:#aaa;font-size:.68rem;">REG. NO.</span><br>
-                <?= htmlspecialchars($ext_data['registration_number']) ?></div>
-              <?php endif; ?>
-            </div>
-            <?php else: ?>
-            <span style="font-size:.75rem;color:#ccc;font-style:italic;">
-              <?= $ai ? '—' : 'Inspect to extract' ?>
-            </span>
-            <?php endif; ?>
-          </td>
-
-          <td style="padding:10px 14px;color:#aaa;font-size:.72rem;white-space:nowrap;">
-            <?= $doc['uploaded'] ?>
           </td>
         </tr>
         <?php endforeach; ?>
@@ -149,33 +166,17 @@ $all_passed   = $inspected > 0 && count(array_filter($uploaded, fn($d) => ($d['a
     </table>
     </div>
 
-    <?php if (!empty($uploaded[0]['ref_number'])): ?>
-    <div style="margin-top:16px;background:#eff6ff;border-radius:8px;padding:12px 16px;
-                font-size:.82rem;color:#1d4ed8;border:1px solid #bfdbfe;">
-      <i class="fa-solid fa-hashtag"></i>
-      Application Reference: <strong><?= htmlspecialchars($uploaded[0]['ref_number']) ?></strong>
-    </div>
-    <?php endif; ?>
-
-    <?php if ($inspected < count($uploaded)): ?>
-    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;
-                padding:12px 16px;margin-top:14px;font-size:.8rem;color:#1d4ed8;">
-      <i class="fa-solid fa-robot"></i>
-      <strong><?= count($uploaded) - $inspected ?> document<?= (count($uploaded)-$inspected)!==1?'s':'' ?></strong>
-      not yet AI-inspected. Go back to <a href="upload.php" style="color:#2563eb;font-weight:700;">Upload</a>
-      and click <strong>Inspect</strong> to verify them before submitting.
-    </div>
-    <?php endif; ?>
-
+    <!-- Disclaimer -->
     <div style="background:#fff7ed;border:1px solid #fcd34d;border-radius:8px;
-                padding:12px 16px;margin-top:12px;font-size:.8rem;color:#92400e;">
+                padding:12px 16px;margin-top:16px;font-size:.8rem;color:#92400e;">
       <i class="fa-solid fa-triangle-exclamation"></i>
-      Once submitted, files cannot be replaced through this portal. Contact the registrar for corrections.
+      Once submitted, documents are sent to the registrar for review.
+      Contact the admissions office if corrections are needed.
     </div>
 
-    <div class="enroll-actions">
+    <div class="enroll-actions" style="margin-top:20px;">
       <a href="upload.php" class="btn-back">
-        <i class="fa-solid fa-arrow-left"></i> Add / Inspect More
+        <i class="fa-solid fa-arrow-left"></i> Add More
       </a>
       <form method="POST" action="submit.php" style="display:inline;">
         <button type="submit" class="btn-proceed">

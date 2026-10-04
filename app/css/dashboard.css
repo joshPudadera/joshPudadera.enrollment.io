@@ -244,7 +244,7 @@ a.sidebar-item {
   transition: margin-left 0.25s ease;
 }
 
-/* When sidebar collapses, reclaim the space */
+/* When sidebar collapses, reclaim the space — also driven by sidebar.js inline style on desktop */
 body:has(.sidebar.collapsed) .main {
   margin-left: 0;
 }
@@ -1118,7 +1118,8 @@ body:has(.sidebar.collapsed) .main {
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
-/* When sidebar is collapsed, stretch full width */
+/* Sidebar collapsed — toast repositions (handled via sidebar.collapsed class on body or sidebar) */
+.sidebar.collapsed ~ * .toast,
 body:has(.sidebar.collapsed) .toast {
   left: 20px;
 }

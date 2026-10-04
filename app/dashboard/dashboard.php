@@ -11,6 +11,8 @@ if (!empty($_SESSION['must_set_password'])) {
 }
 if ($_SESSION['role'] === 'admin') {
     header('Location: ../admin_dashboard/dashboard.php');
+} elseif ($_SESSION['role'] === 'staff') {
+    header('Location: ../staff_dashboard/dashboard.php');
 } else {
     header('Location: ../student_dashboard/dashboard.php');
 }

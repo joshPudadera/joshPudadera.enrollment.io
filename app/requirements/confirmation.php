@@ -36,13 +36,19 @@ $logged_in = !empty($_SESSION['user_id']);
       <i class="fa-solid fa-circle-check"></i>
       <strong><?= (int)$data['count'] ?> file<?= $data['count'] !== 1 ? 's' : '' ?></strong>
       uploaded on <?= htmlspecialchars($data['time']) ?>.
-      <?php if ($data['saved_db'] > 0): ?>
-        <br><i class="fa-solid fa-database" style="margin-top:4px;"></i>
-        <?= $data['saved_db'] ?> record<?= $data['saved_db'] !== 1 ? 's' : '' ?> saved to your enrollment file.
+      <?php if (!empty($data['redacted']) && $data['redacted'] > 0): ?>
+        <br><i class="fa-solid fa-shield-halved" style="margin-top:4px;color:#16a34a;"></i>
+        <?= (int)$data['redacted'] ?> document<?= (int)$data['redacted'] !== 1 ? 's' : '' ?> redacted (PII protected).
       <?php endif; ?>
       <?php if (!empty($data['ai_inspected']) && $data['ai_inspected'] > 0): ?>
         <br><i class="fa-solid fa-robot" style="margin-top:4px;"></i>
-        <?= $data['ai_inspected'] ?> document<?= $data['ai_inspected'] !== 1 ? 's' : '' ?> automatically inspected by AI.
+        <?= (int)$data['ai_inspected'] ?> document<?= (int)$data['ai_inspected'] !== 1 ? 's' : '' ?> verified by AI.
+      <?php endif; ?>
+      <?php if (!empty($data['mismatch_count']) && $data['mismatch_count'] > 0): ?>
+        <br><i class="fa-solid fa-user-xmark" style="margin-top:4px;color:#dc2626;"></i>
+        <span style="color:#dc2626;">
+          <?= (int)$data['mismatch_count'] ?> name mismatch<?= (int)$data['mismatch_count'] !== 1 ? 'es' : '' ?> flagged — admin will review.
+        </span>
       <?php endif; ?>
     </div>
 

@@ -263,11 +263,13 @@ run($conn, "CREATE TABLE IF NOT EXISTS announcements (
 
 $alters = [
     "ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS ref_number VARCHAR(50) DEFAULT NULL",
-    "ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS applicant_type ENUM('Freshman','Senior High','Octoberian','Transferee') DEFAULT NULL",
+    "ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS applicant_type ENUM('Freshman','Senior High') DEFAULT NULL",
     "ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS transfer_year_level VARCHAR(50) DEFAULT NULL",
     "ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL",
     "ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL",
     "ALTER TABLE pre_registrations MODIFY COLUMN user_id INT UNSIGNED NULL DEFAULT NULL",
+    // Add staff to users role ENUM
+    "ALTER TABLE users MODIFY COLUMN role ENUM('admin','student','staff') NOT NULL DEFAULT 'student'",
 ];
 foreach ($alters as $sql) {
     @$conn->query($sql); // suppress — columns may already exist
@@ -288,54 +290,173 @@ if ($stmt) {
     $errors[] = 'Prepare admin seed failed: ' . $conn->error;
 }
 
-// ── Sample students ───────────────────────────────────────────
+// ── Staff account ──────────────────────────────────────────────
+$staff_hash = password_hash('Staff@1234', PASSWORD_DEFAULT);
+$stmt2 = $conn->prepare("INSERT IGNORE INTO users (username,email,first_name,last_name,password_hash,role)
+    VALUES ('staff','staff@bcp.edu.ph','Staff','User',?,'staff')");
+if ($stmt2) {
+    $stmt2->bind_param('s', $staff_hash);
+    if ($stmt2->execute()) $done[] = 'Staff account <code>staff / Staff@1234</code> (email: staff@bcp.edu.ph)';
+    else $errors[] = 'Seed staff: ' . $stmt2->error;
+    $stmt2->close();
+}
+
+// ── Sample students — 50 per year level (200 total) ────────────
 $_r = $conn->query("SELECT COUNT(*) c FROM students");
 $student_count = $_r ? (int)$_r->fetch_assoc()['c'] : 0;
-if ($student_count === 0) {
-    run($conn, "INSERT INTO students (first_name,last_name,birthday,course,year_level,section,phone,status) VALUES
-('Juswa','Pudaders','2004-06-20','Bachelor of Science in Information Technology','4th Year','41018','09999999999','Active'),
-('Maria','Santos','2003-03-15','Bachelor of Science in Computer Science','3rd Year','31011','09111111111','Inactive'),
-('Jose','Reyes','2002-09-10','Bachelor of Science in Information Technology','4th Year','41019','09222222222','Active'),
-('Ana','Cruz','2005-01-25','Bachelor of Science in Information Systems','2nd Year','21005','09333333333','Active'),
-('Carlos','Garcia','2001-11-30','Bachelor of Science in Computer Science','4th Year','41020','09444444444','Inactive'),
-('Liza','Dela Cruz','2003-07-14','Bachelor of Science in Information Technology','3rd Year','31012','09555555501','Active'),
-('Ramon','Villanueva','2002-04-22','Bachelor of Science in Computer Science','4th Year','41021','09555555502','Active'),
-('Patricia','Aquino','2004-11-05','Bachelor of Science in Information Systems','2nd Year','21006','09555555503','Inactive'),
-('Mark','Bautista','2003-08-30','Bachelor of Science in Information Technology','3rd Year','31013','09555555504','Active'),
-('Jenny','Navarro','2005-02-18','Bachelor of Science in Computer Science','1st Year','11001','09555555505','Active'),
-('Rico','Fernandez','2001-12-09','Bachelor of Science in Information Technology','4th Year','41022','09555555506','Inactive'),
-('Sheila','Ramos','2004-05-03','Bachelor of Science in Information Systems','2nd Year','21007','09555555507','Active'),
-('Angelo','Torres','2002-10-27','Bachelor of Science in Computer Science','4th Year','41023','09555555508','Active'),
-('Claire','Mendoza','2003-01-16','Bachelor of Science in Information Technology','3rd Year','31014','09555555509','Inactive'),
-('Danilo','Pascual','2000-09-08','Bachelor of Science in Computer Science','4th Year','41024','09555555510','Active'),
-('Rowena','Espinosa','2005-06-21','Bachelor of Science in Information Systems','1st Year','11002','09555555511','Active'),
-('Freddie','Castillo','2002-03-13','Bachelor of Science in Information Technology','4th Year','41025','09555555512','Inactive'),
-('Aileen','Morales','2004-09-29','Bachelor of Science in Computer Science','2nd Year','21008','09555555513','Active'),
-('Ronnie','Aguilar','2001-07-04','Bachelor of Science in Information Technology','4th Year','41026','09555555514','Active'),
-('Mylene','Domingo','2003-12-11','Bachelor of Science in Information Systems','3rd Year','31015','09555555515','Inactive'),
-('Bryan','Lacson','2004-04-07','Bachelor of Science in Computer Science','2nd Year','21009','09555555516','Active'),
-('Rosalie','Ilagan','2002-08-19','Bachelor of Science in Information Technology','4th Year','41027','09555555517','Active'),
-('Eduardo','Pineda','2005-03-25','Bachelor of Science in Computer Science','1st Year','11003','09555555518','Inactive'),
-('Vanessa','Ocampo','2003-10-02','Bachelor of Science in Information Systems','3rd Year','31016','09555555519','Active'),
-('Kenneth','Bondoc','2001-05-17','Bachelor of Science in Information Technology','4th Year','41028','09555555520','Active')",
-    'Seeded <strong>25 sample students</strong>', $done, $errors);
+if ($student_count < 100) {
+    $courses = [
+        'Bachelor of Science in Information Technology',
+        'Bachelor of Science in Computer Engineering',
+        'Bachelor of Science in Psychology',
+        'Bachelor of Elementary Education',
+        'Bachelor of Secondary Education major in English',
+        'Bachelor of Science in Criminology',
+        'Bachelor of Science in Accounting Information System',
+        'Bachelor of Science in Entrepreneurship',
+        'Bachelor of Science in Business Administration major in Marketing Management',
+        'Bachelor of Science in Business Administration major in Human Resource Management',
+        'Bachelor of Science in Tourism Management',
+        'Bachelor of Science in Hospitality Management',
+    ];
+    $sections = [
+        '1st Year' => ['11A','11B','11C'],
+        '2nd Year' => ['21A','21B','21C'],
+        '3rd Year' => ['31A','31B','31C'],
+        '4th Year' => ['41A','41B','41C'],
+    ];
+    $first_names = ['Juan','Maria','Jose','Ana','Carlos','Liza','Ramon','Patricia',
+                    'Mark','Jenny','Rico','Sheila','Angelo','Claire','Danilo',
+                    'Rowena','Freddie','Aileen','Ronnie','Mylene','Bryan','Rosalie',
+                    'Eduardo','Vanessa','Kenneth','Grace','Patrick','Kristine','Arnold',
+                    'Maricel','Dante','Lovely','Rodel','Jasmine','Erwin','Carmela',
+                    'Jayson','Sheryl','Leo','Maricris','Alvin','Jonalyn','Ricky',
+                    'Glenda','Edgar','Hazel','Jerome','Abegail','Noel','Florinda'];
+    $last_names  = ['Santos','Reyes','Cruz','Garcia','Navarro','Fernandez','Ramos',
+                    'Torres','Mendoza','Pascual','Espinosa','Castillo','Morales','Aguilar',
+                    'Domingo','Lacson','Ilagan','Pineda','Ocampo','Bondoc','Villanueva',
+                    'Aquino','Bautista','Dela Cruz','Gonzales','Perez','Lim','Tan',
+                    'Ong','Yap','Chan','Chua','Co','Dy','Go','Sy','Uy','Velasco',
+                    'Miranda','Soriano','Dizon','Tolentino','Panganiban','Macapagal',
+                    'Dimaculangan','Magpantay','Baluyot','Manalo','Delos Santos','Alcantara'];
+    $statuses = ['Active','Active','Active','Active','Inactive']; // 80% active
+
+    $inserted = 0;
+    $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
+    foreach ($year_levels as $yl_idx => $yr) {
+        for ($i = 0; $i < 50; $i++) {
+            $fn  = $first_names[($i + $yl_idx * 13) % count($first_names)];
+            $ln  = $last_names[($i * 3 + $yl_idx * 7) % count($last_names)];
+            // Make names unique by appending a number if needed
+            $fn_u = $fn . ($yl_idx > 0 ? ' ' . chr(65 + $yl_idx) : '');
+            $course = $courses[$i % count($courses)];
+            $sec_list = $sections[$yr];
+            $sec = $sec_list[$i % count($sec_list)];
+            $birth_year = 2026 - (18 + ($yl_idx * 1));
+            $birth_month= str_pad(($i % 12) + 1, 2, '0', STR_PAD_LEFT);
+            $birth_day  = str_pad(($i % 28) + 1, 2, '0', STR_PAD_LEFT);
+            $bday = "$birth_year-$birth_month-$birth_day";
+            $phone = '0917' . str_pad(($yl_idx * 50 + $i + 10000000), 8, '0', STR_PAD_LEFT);
+            $status = $statuses[$i % count($statuses)];
+            $s = $conn->prepare(
+                "INSERT IGNORE INTO students (first_name,last_name,birthday,course,year_level,section,phone,status)
+                 VALUES (?,?,?,?,?,?,?,?)"
+            );
+            if ($s) {
+                $s->bind_param('ssssssss', $fn_u, $ln, $bday, $course, $yr, $sec, $phone, $status);
+                if ($s->execute()) $inserted++;
+                $s->close();
+            }
+        }
+    }
+    $done[] = "Seeded <strong>$inserted students</strong> (50 per year level × 4 = 200)";
 } else {
     $done[] = "Students table already has <strong>$student_count</strong> records — skipped.";
 }
 
+// ── BSIT 1st Year — 49 students in section BSIT-1A ───────────
+$_bsit_check = $conn->query(
+    "SELECT COUNT(*) c FROM students
+     WHERE course='Bachelor of Science in Information Technology'
+       AND year_level='1st Year' AND section='BSIT-1A'"
+);
+$_bsit_count = $_bsit_check ? (int)$_bsit_check->fetch_assoc()['c'] : 0;
+
+if ($_bsit_count < 49) {
+    $bsit_first = ['James','Maria','Carlo','Ana','Miguel','Sofia','Kevin','Liza',
+                   'Patrick','Jenny','Ronald','Carla','Dennis','Hazel','Mark','Leah',
+                   'Jerome','Grace','Allan','Sheena','Arnold','Jessa','Bryan','Kath',
+                   'Ricky','Vanessa','Eduardo','Lovely','Danilo','Rowena','Freddie',
+                   'Aileen','Angelo','Claire','Leo','Maricris','Alvin','Jonalyn',
+                   'Dante','Jasmine','Erwin','Carmela','Jayson','Sheryl','Noel',
+                   'Florinda','Rico','Abegail','Ryan'];
+    $bsit_last  = ['Santos','Reyes','Cruz','Garcia','Navarro','Fernandez','Ramos',
+                   'Torres','Mendoza','Pascual','Espinosa','Castillo','Morales',
+                   'Aguilar','Domingo','Lacson','Ilagan','Pineda','Ocampo','Bondoc',
+                   'Villanueva','Aquino','Bautista','Dela Cruz','Gonzales','Perez',
+                   'Lim','Tan','Ong','Yap','Chan','Chua','Co','Dy','Go','Sy','Uy',
+                   'Velasco','Miranda','Soriano','Dizon','Tolentino','Panganiban',
+                   'Magpantay','Baluyot','Manalo','Alcantara','Delos Santos','Mateo'];
+    $course_bsit = 'Bachelor of Science in Information Technology';
+    $bsit_inserted = 0;
+    for ($i = 0; $i < 49; $i++) {
+        $fn    = $bsit_first[$i % count($bsit_first)];
+        $ln    = $bsit_last[$i  % count($bsit_last)];
+        $by    = 2025 - (18 + ($i % 3));
+        $bm    = str_pad(($i % 12) + 1, 2, '0', STR_PAD_LEFT);
+        $bd    = str_pad(($i % 28) + 1, 2, '0', STR_PAD_LEFT);
+        $bday  = "$by-$bm-$bd";
+        $phone = '0917' . str_pad(10000000 + $i, 8, '0', STR_PAD_LEFT);
+        $s = $conn->prepare(
+            "INSERT IGNORE INTO students
+                (first_name,last_name,birthday,course,year_level,section,phone,status)
+             VALUES (?,?,?,?,?,?,?,'Active')"
+        );
+        if ($s) {
+            $sec = 'BSIT-1A';
+            $yl  = '1st Year';
+            $s->bind_param('sssssss', $fn, $ln, $bday, $course_bsit, $yl, $sec, $phone);
+            if ($s->execute()) $bsit_inserted++;
+            $s->close();
+        }
+    }
+    // Sync section current_count
+    $conn->query(
+        "UPDATE sections SET current_count=(
+            SELECT COUNT(*) FROM students WHERE section='BSIT-1A'
+         ) WHERE section_code='BSIT-1A'"
+    );
+    $done[] = "Seeded <strong>$bsit_inserted BSIT 1st Year students</strong> in section BSIT-1A.";
+} else {
+    $done[] = "BSIT-1A already has <strong>$_bsit_count</strong> students — skipped.";
+}
 // ── Sample sections ───────────────────────────────────────────
 run($conn, "INSERT IGNORE INTO sections (section_code,course,year_level,adviser_name,max_capacity,current_count) VALUES
-('BSIT-1A','Bachelor of Science in Information Technology','1st Year','Prof. Santos',40,28),
-('BSIT-2A','Bachelor of Science in Information Technology','2nd Year','Prof. Reyes',40,35),
-('BSIT-3A','Bachelor of Science in Information Technology','3rd Year','Prof. Cruz',40,40),
-('BSIT-4A','Bachelor of Science in Information Technology','4th Year','Prof. Garcia',40,38),
-('BSCS-1A','Bachelor of Science in Computer Science','1st Year','Prof. Navarro',40,22),
-('BSCS-2A','Bachelor of Science in Computer Science','2nd Year','Prof. Fernandez',40,30),
-('BSCS-3A','Bachelor of Science in Computer Science','3rd Year','Prof. Ramos',40,40),
-('BSCS-4A','Bachelor of Science in Computer Science','4th Year','Prof. Torres',40,37),
-('BSIS-2A','Bachelor of Science in Information Systems','2nd Year','Prof. Mendoza',40,25),
-('BSIS-3A','Bachelor of Science in Information Systems','3rd Year','Prof. Pascual',40,18)",
-'Seeded <strong>10 sections</strong>', $done, $errors);
+('BSIT-1A','Bachelor of Science in Information Technology','1st Year','Prof. Santos',50,17),
+('BSIT-1B','Bachelor of Science in Information Technology','1st Year','Prof. Reyes',50,16),
+('BSIT-2A','Bachelor of Science in Information Technology','2nd Year','Prof. Cruz',50,17),
+('BSIT-2B','Bachelor of Science in Information Technology','2nd Year','Prof. Garcia',50,16),
+('BSIT-3A','Bachelor of Science in Information Technology','3rd Year','Prof. Navarro',50,17),
+('BSIT-3B','Bachelor of Science in Information Technology','3rd Year','Prof. Fernandez',50,16),
+('BSIT-4A','Bachelor of Science in Information Technology','4th Year','Prof. Ramos',50,17),
+('BSIT-4B','Bachelor of Science in Information Technology','4th Year','Prof. Torres',50,16),
+('BSCPE-1A','Bachelor of Science in Computer Engineering','1st Year','Prof. Mendoza',50,17),
+('BSCPE-1B','Bachelor of Science in Computer Engineering','1st Year','Prof. Pascual',50,16),
+('BSCPE-2A','Bachelor of Science in Computer Engineering','2nd Year','Prof. Espinosa',50,17),
+('BSCPE-2B','Bachelor of Science in Computer Engineering','2nd Year','Prof. Castillo',50,16),
+('BSCPE-3A','Bachelor of Science in Computer Engineering','3rd Year','Prof. Morales',50,17),
+('BSCPE-3B','Bachelor of Science in Computer Engineering','3rd Year','Prof. Aguilar',50,16),
+('BSCPE-4A','Bachelor of Science in Computer Engineering','4th Year','Prof. Domingo',50,17),
+('BSCPE-4B','Bachelor of Science in Computer Engineering','4th Year','Prof. Lacson',50,16),
+('BSCRIM-1A','Bachelor of Science in Criminology','1st Year','Prof. Ilagan',50,17),
+('BSCRIM-2A','Bachelor of Science in Criminology','2nd Year','Prof. Pineda',50,17),
+('BSCRIM-3A','Bachelor of Science in Criminology','3rd Year','Prof. Ocampo',50,16),
+('BSCRIM-4A','Bachelor of Science in Criminology','4th Year','Prof. Bondoc',50,17),
+('BSHM-1A','Bachelor of Science in Hospitality Management','1st Year','Prof. Villanueva',50,16),
+('BSHM-2A','Bachelor of Science in Hospitality Management','2nd Year','Prof. Aquino',50,17),
+('BSHM-3A','Bachelor of Science in Hospitality Management','3rd Year','Prof. Bautista',50,16),
+('BSHM-4A','Bachelor of Science in Hospitality Management','4th Year','Prof. Dela Cruz',50,17)",
+'Seeded <strong>24 sections</strong> (all year levels × 4 courses)', $done, $errors);
 
 // ── Sample subjects ───────────────────────────────────────────
 $_r = $conn->query("SELECT COUNT(*) c FROM subjects");
@@ -435,8 +556,8 @@ $conn->close();
     </div>
     <div class="creds">
       <strong>Default Login Credentials</strong><br>
-      Username: <code>admin</code><br>
-      Password: <code>Admin@1234</code><br>
+      Admin &mdash; Username: <code>admin</code> &nbsp; Password: <code>Admin@1234</code><br>
+      Staff &mdash; Username: <code>staff</code> &nbsp; Password: <code>Staff@1234</code> &nbsp; Email: <code>staff@bcp.edu.ph</code><br>
       Database: <code>sms_db</code> @ <code>enrollment.bcpsms2.com</code>
     </div>
     <a class="btn" href="../auth/signin.php">&#8594; Go to Sign In</a>

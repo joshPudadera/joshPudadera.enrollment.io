@@ -3,11 +3,15 @@ session_start();
 require_once __DIR__ . '/../shared/db.php';
 require_enrollment_tables($conn);
 if (empty($_SESSION['user_id']))   { header('Location: ../auth/signin.php'); exit; }
-if ($_SESSION['role'] !== 'admin') { header('Location: ../admin_dashboard/dashboard.php'); exit; }
+if (!is_admin_or_staff()) { header('Location: ../auth/signin.php'); exit; }
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'U', 0, 1));
 
 // Ensure grade_confirmed column exists (idempotent)
 @$conn->query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS grade_confirmed TINYINT(1) NOT NULL DEFAULT 0");
+
+// Ensure pre_registrations has applicant_type / transfer_year_level columns (idempotent)
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS applicant_type ENUM('Freshman','Senior High','Octoberian','Transferee') DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS transfer_year_level VARCHAR(50) DEFAULT NULL");
 
 // ── Step 3 of pipeline: Grade Level Assignment ────────────────
 // Gate:  Student must have an enrollment row (ID generated = step 3 done)
@@ -19,17 +23,54 @@ $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'U', 0, 1));
 $pending = [];   // grade_confirmed = 0
 $done    = [];   // grade_confirmed = 1
 
+$search = trim($_GET['q'] ?? '');
+$filter_course = trim($_GET['course'] ?? '');
+$filter_yr = trim($_GET['year'] ?? '');
+$rows_per_page = 10;
+$page_p = max(1, (int)($_GET['page_p'] ?? 1));
+$page_d = max(1, (int)($_GET['page_d'] ?? 1));
+
+$base_where = "1=1";
+if ($search) {
+    $esc = $conn->real_escape_string($search);
+    $base_where .= " AND (p.first_name LIKE '%$esc%' OR p.last_name LIKE '%$esc%' OR e.id_number LIKE '%$esc%')";
+}
+if ($filter_course) {
+    $esc = $conn->real_escape_string($filter_course);
+    $base_where .= " AND e.course LIKE '%$esc%'";
+}
+if ($filter_yr) {
+    $esc = $conn->real_escape_string($filter_yr);
+    $base_where .= " AND e.year_level = '$esc'";
+}
+
+$pending_count = (int)$conn->query("SELECT COUNT(*) c FROM enrollments e JOIN pre_registrations p ON e.pre_reg_id=p.id WHERE e.grade_confirmed=0 AND $base_where")->fetch_assoc()['c'];
+$done_count    = (int)$conn->query("SELECT COUNT(*) c FROM enrollments e JOIN pre_registrations p ON e.pre_reg_id=p.id WHERE e.grade_confirmed=1 AND $base_where")->fetch_assoc()['c'];
+$pending_pages = max(1, (int)ceil($pending_count / $rows_per_page));
+$done_pages    = max(1, (int)ceil($done_count    / $rows_per_page));
+$page_p = min($page_p, $pending_pages);
+$page_d = min($page_d, $done_pages);
+
 $res = $conn->query(
     "SELECT e.*, p.first_name, p.last_name, p.ref_number,
             p.applicant_type, p.transfer_year_level
      FROM enrollments e
      JOIN pre_registrations p ON e.pre_reg_id = p.id
-     ORDER BY e.grade_confirmed ASC, p.last_name ASC"
+     WHERE e.grade_confirmed=0 AND $base_where
+     ORDER BY p.last_name ASC
+     LIMIT $rows_per_page OFFSET " . (($page_p-1)*$rows_per_page)
 );
-if ($res) while ($r = $res->fetch_assoc()) {
-    if ($r['grade_confirmed']) $done[]    = $r;
-    else                       $pending[] = $r;
-}
+if ($res) while ($r = $res->fetch_assoc()) $pending[] = $r;
+
+$res2 = $conn->query(
+    "SELECT e.*, p.first_name, p.last_name, p.ref_number
+     FROM enrollments e
+     JOIN pre_registrations p ON e.pre_reg_id = p.id
+     WHERE e.grade_confirmed=1 AND $base_where
+     ORDER BY p.last_name ASC
+     LIMIT $rows_per_page OFFSET " . (($page_d-1)*$rows_per_page)
+);
+if ($res2) while ($r = $res2->fetch_assoc()) $done[] = $r;
 
 $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
 ?>
@@ -68,15 +109,37 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
       after this step is complete.
     </div>
 
+    <!-- Search/filter bar -->
+    <form method="GET" style="margin:0 24px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <div class="search-wrap" style="flex:1;min-width:200px;max-width:300px;">
+        <input type="text" name="q" value="<?= htmlspecialchars($search) ?>" placeholder="Search name or ID number…"/>
+        <i class="fa-solid fa-magnifying-glass"></i>
+      </div>
+      <select name="course" style="height:36px;border:1px solid #ddd;border-radius:8px;padding:0 10px;font-size:.82rem;background:#fff;">
+        <option value="">All Courses</option>
+        <?php foreach(['Information Technology','Computer Engineering','Library Information Science',
+                        'Psychology','Elementary Education','Technology and Livelihood Education',
+                        'Secondary Education','Physical Education','Criminology',
+                        'Accounting Information System','Entrepreneurship',
+                        'Marketing Management','Human Resource Management','Financial Management',
+                        'Office Administration','Tourism Management','Hospitality Management'] as $c): ?>
+        <option value="<?= $c ?>" <?= str_contains($filter_course,$c)?'selected':'' ?>><?= $c ?></option>
+        <?php endforeach; ?>
+      </select>
+      <select name="year" style="height:36px;border:1px solid #ddd;border-radius:8px;padding:0 10px;font-size:.82rem;background:#fff;">
+        <option value="">All Years</option>
+        <?php foreach(['1st Year','2nd Year','3rd Year','4th Year'] as $y): ?>
+        <option value="<?= $y ?>" <?= $filter_yr===$y?'selected':'' ?>><?= $y ?></option>
+        <?php endforeach; ?>
+      </select>
+      <button type="submit" class="btn-add" style="padding:7px 14px;font-size:.8rem;"><i class="fa-solid fa-filter"></i> Filter</button>
+      <?php if($search||$filter_course||$filter_yr): ?><a href="grade_assignment.php" class="btn-secondary" style="padding:7px 12px;font-size:.8rem;text-decoration:none;">Clear</a><?php endif; ?>
+    </form>
+
     <!-- Pending confirmation -->
     <div class="crud-card">
       <div class="crud-header">
-        <h3>
-          Awaiting Confirmation
-          <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;">
-            <?= count($pending) ?> student<?= count($pending) !== 1 ? 's' : '' ?>
-          </span>
-        </h3>
+        <h3>Awaiting Confirmation <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;"><?= $pending_count ?> student<?= $pending_count!==1?'s':'' ?></span></h3>
       </div>
       <?php if ($pending): ?>
       <table class="crud-table">
@@ -160,19 +223,23 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
         All enrolled students have been confirmed.
       </div>
       <?php endif; ?>
+      <?php if ($pending_pages > 1): ?>
+      <div class="crud-pagination">
+        <?php $qs=http_build_query(['q'=>$search,'course'=>$filter_course,'year'=>$filter_yr]);
+        if($page_p>1) echo "<a href='?$qs&page_p=".($page_p-1)."' class='pg-btn pg-label'>&laquo;</a>";
+        for($p=max(1,$page_p-2);$p<=min($pending_pages,$page_p+2);$p++) echo "<a href='?$qs&page_p=$p' class='pg-btn".($p===$page_p?' active':'')."'>$p</a>";
+        if($page_p<$pending_pages) echo "<a href='?$qs&page_p=".($page_p+1)."' class='pg-btn pg-label'>&raquo;</a>"; ?>
+      </div>
+      <?php endif; ?>
     </div>
 
     <!-- Already confirmed -->
-    <?php if ($done): ?>
+    <?php if ($done || $done_count > 0): ?>
     <div class="crud-card">
       <div class="crud-header">
-        <h3>
-          Confirmed
-          <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;">
-            <?= count($done) ?> student<?= count($done) !== 1 ? 's' : '' ?>
-          </span>
-        </h3>
+        <h3>Confirmed <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;"><?= $done_count ?> student<?= $done_count!==1?'s':'' ?></span></h3>
       </div>
+      <?php if ($done): ?>
       <table class="crud-table">
         <thead><tr>
           <th>ID Number</th><th>Name</th><th>Course</th><th>Year Level</th><th>Section</th>
@@ -195,6 +262,20 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
           <?php endforeach; ?>
         </tbody>
       </table>
+      <?php if ($done_pages > 1): ?>
+      <div class="crud-pagination">
+        <?php
+        $qs = http_build_query(['q'=>$search,'course'=>$filter_course,'year'=>$filter_yr,'page_p'=>$page_p]);
+        if ($page_d > 1) echo "<a href='?$qs&page_d=".($page_d-1)."' class='pg-btn pg-label'>&laquo;</a>";
+        for ($p = max(1,$page_d-2); $p <= min($done_pages,$page_d+2); $p++)
+            echo "<a href='?$qs&page_d=$p' class='pg-btn".($p===$page_d?' active':'')."'>$p</a>";
+        if ($page_d < $done_pages) echo "<a href='?$qs&page_d=".($page_d+1)."' class='pg-btn pg-label'>&raquo;</a>";
+        ?>
+      </div>
+      <?php endif; ?>
+      <?php else: ?>
+      <div style="padding:24px;text-align:center;color:#aaa;font-size:.85rem;">No confirmed students on this page.</div>
+      <?php endif; ?>
     </div>
     <?php endif; ?>
 

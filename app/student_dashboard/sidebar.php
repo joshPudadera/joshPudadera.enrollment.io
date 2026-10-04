@@ -46,38 +46,6 @@ $ACTIVE_NAV = $ACTIVE_NAV ?? '';
     <div class="sidebar-divider"></div>
 
     <div class="sidebar-brand sidebar-brand-2">
-      <div class="brand-title">Academic</div>
-      <div class="brand-sub">My Records</div>
-    </div>
-
-    <div class="nav-group">
-      <button class="sidebar-item <?= $ACTIVE_NAV==='schedule'?'active':'' ?> dropdown-trigger"
-              data-target="s-drop1">
-        <i class="fa-solid fa-calendar-days"></i>
-        <span>Schedule</span>
-        <i class="fa-solid fa-chevron-down arrow"></i>
-      </button>
-      <div class="dropdown-menu" id="s-drop1">
-        <a href="<?= $APP_ROOT ?>schedule_tab/class_schedule.php" class="dropdown-item">Class Schedule</a>
-        <a href="<?= $APP_ROOT ?>schedule_tab/exam_schedule.php"  class="dropdown-item">Exam Schedule</a>
-      </div>
-    </div>
-
-    <div class="nav-group">
-      <button class="sidebar-item <?= $ACTIVE_NAV==='subjects'?'active':'' ?> dropdown-trigger"
-              data-target="s-drop2">
-        <i class="fa-solid fa-book"></i>
-        <span>Subjects</span>
-        <i class="fa-solid fa-chevron-down arrow"></i>
-      </button>
-      <div class="dropdown-menu" id="s-drop2">
-        <a href="<?= $APP_ROOT ?>academic_tab/subjects.php" class="dropdown-item">Subject List</a>
-      </div>
-    </div>
-
-    <div class="sidebar-divider"></div>
-
-    <div class="sidebar-brand sidebar-brand-2">
       <div class="brand-title">Account</div>
       <div class="brand-sub">Settings</div>
     </div>

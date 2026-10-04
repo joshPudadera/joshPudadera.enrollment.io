@@ -61,6 +61,11 @@ if (!empty($_SESSION['user_id'])) {
         <i class="fa-solid fa-circle-xmark"></i>
         Invalid login link. Use the link from your email or sign in manually.
       </div>
+      <?php elseif (($_GET['reason'] ?? '') === 'timeout'): ?>
+      <div class="auth-error" style="display:block;margin-bottom:14px;background:#fff7ed;color:#92400e;border-color:#fcd34d;">
+        <i class="fa-solid fa-clock"></i>
+        You were signed out due to inactivity. Please sign in again.
+      </div>
       <?php endif; ?>
 
       <form id="signinForm" style="width:100%">
@@ -120,10 +125,12 @@ document.getElementById('signinForm').addEventListener('submit', async function 
     try {
         const data = await fetch('../shared/auth_actions.php', { method: 'POST', body: fd }).then(r => r.json());
         if (data.success) {
-            const dest = data.role === 'admin'
-                ? '../dashboard/loading.php'
-                : '../dashboard/loading.php';
-            window.location.href = dest;
+            if (data.mfa) {
+                // Admin/staff: go to MFA verification page
+                window.location.href = 'mfa.php';
+            } else {
+                window.location.href = '../dashboard/loading.php';
+            }
         } else {
             showError(data.message);
             btn.disabled  = false;

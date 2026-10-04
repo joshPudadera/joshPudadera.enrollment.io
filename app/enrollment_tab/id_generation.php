@@ -3,25 +3,51 @@ session_start();
 require_once __DIR__ . '/../shared/db.php';
 require_enrollment_tables($conn);
 if (empty($_SESSION['user_id'])) { header('Location: ../auth/signin.php'); exit; }
-if ($_SESSION['role'] !== 'admin') { header('Location: ../admin_dashboard/dashboard.php'); exit; }
+if (!is_admin_or_staff()) { header('Location: ../auth/signin.php'); exit; }
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'U', 0, 1));
 
-// Approved apps that don't yet have an enrollment record
+$search = trim($_GET['q'] ?? '');
+$filter_course = trim($_GET['course'] ?? '');
+
+$rows_per_page = 10;
+$page = max(1, (int)($_GET['page'] ?? 1));
+
+// ── Pending ID generation (with search/pagination) ──────────
+$pending_where = "p.status = 'Approved' AND e.id IS NULL";
+if ($search) {
+    $esc = $conn->real_escape_string($search);
+    $pending_where .= " AND (p.first_name LIKE '%$esc%' OR p.last_name LIKE '%$esc%'
+                            OR p.ref_number LIKE '%$esc%')";
+}
+if ($filter_course) {
+    $esc = $conn->real_escape_string($filter_course);
+    $pending_where .= " AND p.course LIKE '%$esc%'";
+}
+$pending_count = (int)$conn->query(
+    "SELECT COUNT(*) c FROM pre_registrations p
+     LEFT JOIN enrollments e ON e.pre_reg_id = p.id
+     WHERE $pending_where"
+)->fetch_assoc()['c'];
+$pending_pages = max(1, (int)ceil($pending_count / $rows_per_page));
+$page          = min($page, $pending_pages);
+$offset        = ($page - 1) * $rows_per_page;
+
 $apps = [];
 $res = $conn->query(
     "SELECT p.* FROM pre_registrations p
      LEFT JOIN enrollments e ON e.pre_reg_id = p.id
-     WHERE p.status = 'Approved' AND e.id IS NULL
-     ORDER BY p.submitted_at ASC"
+     WHERE $pending_where
+     ORDER BY p.submitted_at ASC
+     LIMIT $rows_per_page OFFSET $offset"
 );
 if ($res) while ($r = $res->fetch_assoc()) $apps[] = $r;
 
-// Already enrolled
+// ── Recently generated (last 10) ───────────────────────────
 $enrolled = [];
 $res2 = $conn->query(
     "SELECT e.*, p.first_name, p.last_name FROM enrollments e
      JOIN pre_registrations p ON e.pre_reg_id = p.id
-     ORDER BY e.enrolled_at DESC LIMIT 20"
+     ORDER BY e.enrolled_at DESC LIMIT 10"
 );
 if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
 ?>
@@ -69,7 +95,27 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
 
     <!-- Pending ID generation -->
     <div class="crud-card">
-      <div class="crud-header"><h3>Approved — Pending ID (<?= count($apps) ?>)</h3></div>
+      <!-- Search + filter -->
+      <form method="GET" style="padding:0 0 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <div class="search-wrap" style="flex:1;min-width:200px;max-width:320px;">
+          <input type="text" name="q" value="<?= htmlspecialchars($search) ?>" placeholder="Search name or ref no.…"/>
+          <i class="fa-solid fa-magnifying-glass"></i>
+        </div>
+        <select name="course" style="height:36px;border:1px solid #ddd;border-radius:8px;padding:0 10px;font-size:.82rem;background:#fff;">
+          <option value="">All Courses</option>
+          <?php foreach(['Information Technology','Computer Engineering','Library Information Science',
+                          'Psychology','Elementary Education','Technology and Livelihood Education',
+                          'Secondary Education','Physical Education','Criminology',
+                          'Accounting Information System','Entrepreneurship',
+                          'Marketing Management','Human Resource Management','Financial Management',
+                          'Office Administration','Tourism Management','Hospitality Management'] as $c): ?>
+          <option value="<?= $c ?>" <?= str_contains($filter_course,$c)?'selected':'' ?>><?= $c ?></option>
+          <?php endforeach; ?>
+        </select>
+        <button type="submit" class="btn-primary" style="padding:6px 14px;font-size:.8rem;"><i class="fa-solid fa-filter"></i> Filter</button>
+        <?php if($search||$filter_course): ?><a href="id_generation.php" class="btn-secondary" style="padding:6px 12px;font-size:.8rem;text-decoration:none;">Clear</a><?php endif; ?>
+      </form>
+      <div class="crud-header"><h3>Approved — Pending ID (<?= $pending_count ?>)</h3></div>
       <table class="crud-table">
         <thead>
           <tr>
@@ -104,6 +150,17 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
           <?php endif; ?>
         </tbody>
       </table>
+      <?php if ($pending_pages > 1): ?>
+      <div class="crud-pagination">
+        <?php
+        $qs = http_build_query(['q'=>$search,'course'=>$filter_course]);
+        if ($page>1) echo "<a href='?$qs&page=".($page-1)."' class='pg-btn pg-label'>&laquo; Prev</a>";
+        for ($p=max(1,$page-2);$p<=min($pending_pages,$page+2);$p++)
+            echo "<a href='?$qs&page=$p' class='pg-btn".($p===$page?' active':'')."'>$p</a>";
+        if ($page<$pending_pages) echo "<a href='?$qs&page=".($page+1)."' class='pg-btn pg-label'>Next &raquo;</a>";
+        ?>
+      </div>
+      <?php endif; ?>
     </div>
 
     <!-- Already enrolled with IDs -->
@@ -144,8 +201,8 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
 <!-- Confirm Modal -->
-<div class="modal-overlay" id="genConfirmModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:14px;padding:28px 28px 20px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2);">
+<div class="modal-overlay" id="genConfirmModal">
+  <div class="modal" style="max-width:400px;width:90%;padding:28px 28px 20px;">
     <h3 style="font-size:1rem;font-weight:700;color:#1a1a2e;margin-bottom:8px;">Generate Student ID</h3>
     <p id="genConfirmMsg" style="font-size:.88rem;color:#555;margin-bottom:20px;line-height:1.5;"></p>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
@@ -156,8 +213,8 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
 </div>
 
 <!-- Result Modal -->
-<div class="modal-overlay" id="genResultModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:14px;padding:28px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2);text-align:center;">
+<div class="modal-overlay" id="genResultModal">
+  <div class="modal" style="max-width:400px;width:90%;padding:28px;text-align:center;">
     <i id="genResultIcon" class="fa-solid fa-circle-check" style="font-size:2.5rem;color:#16a34a;display:block;margin-bottom:14px;"></i>
     <h3 id="genResultTitle" style="font-size:1rem;font-weight:700;color:#1a1a2e;margin-bottom:8px;"></h3>
     <p id="genResultMsg"   style="font-size:.88rem;color:#555;margin-bottom:20px;line-height:1.5;"></p>
@@ -184,12 +241,12 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
 
     function showConfirm(msg, btn) {
         confirmMsg.textContent = msg;
-        confirmModal.style.display = 'flex';
+        confirmModal.classList.add('active');
         _pendingBtn = btn;
     }
 
     function hideConfirm() {
-        confirmModal.style.display = 'none';
+        confirmModal.classList.remove('active');
         _pendingBtn = null;
     }
 
@@ -200,7 +257,7 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
         resultIcon.style.color = success ? '#16a34a' : '#dc2626';
         resultTitle.textContent = title;
         resultMsg.textContent   = msg;
-        resultModal.style.display = 'flex';
+        resultModal.classList.add('active');
     }
 
     confirmCancel.addEventListener('click', hideConfirm);
@@ -236,7 +293,7 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
                 if (data.success) {
                     showResult(true, 'ID Generated!', 'Student ID: ' + data.id_number);
                     resultClose.onclick = function() {
-                        resultModal.style.display = 'none';
+                        resultModal.classList.remove('active');
                         location.reload();
                     };
                 } else {
@@ -244,7 +301,7 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
                     btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Generate ID';
                     showResult(false, 'Error', data.message);
                     resultClose.onclick = function() {
-                        resultModal.style.display = 'none';
+                        resultModal.classList.remove('active');
                     };
                 }
             })
@@ -252,15 +309,15 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
                 btn.disabled = false;
                 btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Generate ID';
                 showResult(false, 'Request Failed', 'Could not reach the server. Check your connection.');
-                resultClose.onclick = function() { resultModal.style.display = 'none'; };
+                resultClose.onclick = function() { resultModal.classList.remove('active'); };
             });
     });
 
     resultClose.addEventListener('click', function() {
-        resultModal.style.display = 'none';
+        resultModal.classList.remove('active');
     });
     resultModal.addEventListener('click', function(e) {
-        if (e.target === resultModal) resultModal.style.display = 'none';
+        if (e.target === resultModal) resultModal.classList.remove('active');
     });
 
     document.querySelectorAll('.btn-gen-id').forEach(function(btn) {

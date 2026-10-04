@@ -13,7 +13,7 @@ require_once __DIR__ . '/../shared/db.php';
 header('Content-Type: application/json');
 
 // Auth guard
-if (empty($_SESSION['user_id']) || ($_SESSION['role'] ?? '') !== 'admin') {
+if (empty($_SESSION['user_id']) || !is_admin_or_staff()) {
     echo json_encode(['success' => false, 'error' => 'Unauthorized']);
     exit;
 }
@@ -81,7 +81,11 @@ if (file_exists($env_file)) {
 
 // Fallback: derive from DOCUMENT_ROOT + __FILE__
 if (!$app_url) {
-    $scheme   = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    // Respect reverse-proxy header (Nginx / Cloudflare / shared hosting)
+    if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) {
+        $scheme = strtolower(trim(explode(',', $_SERVER['HTTP_X_FORWARDED_PROTO'])[0]));
+    }
     $host     = $_SERVER['HTTP_HOST'];
     $doc_root = rtrim(str_replace('\\', '/', $_SERVER['DOCUMENT_ROOT']), '/');
     $app_root = rtrim(str_replace('\\', '/', dirname(dirname(__FILE__))), '/');

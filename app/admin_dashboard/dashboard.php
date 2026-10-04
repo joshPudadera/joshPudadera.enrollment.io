@@ -2,7 +2,7 @@
 session_start();
 require_once __DIR__ . '/../shared/db.php';
 if (empty($_SESSION['user_id']))   { header('Location: ../auth/signin.php'); exit; }
-if ($_SESSION['role'] !== 'admin') { header('Location: ../student_dashboard/dashboard.php'); exit; }
+if ($_SESSION['role'] !== 'admin' && $_SESSION['role'] !== 'staff') { header('Location: ../student_dashboard/dashboard.php'); exit; }
 
 $sess_first   = htmlspecialchars($_SESSION['first_name'] ?? '');
 $sess_last    = htmlspecialchars($_SESSION['last_name']  ?? '');
@@ -140,16 +140,16 @@ if ($r && $r->num_rows > 0) {
     <div class="info-row">
       <div class="info-card">
         <div class="card-label"><i class="fa-solid fa-users"></i> Total Students</div>
-        <div class="card-amount"><?= $total_students ?></div>
+        <div class="card-amount" id="stat-total-students"><?= $total_students ?></div>
         <div class="card-detail">
-          <span class="badge-active">Active: <?= $active_students ?></span> &nbsp;
-          <span class="badge-inactive">Inactive: <?= $inactive_students ?></span>
+          <span class="badge-active" id="stat-active-students">Active: <?= $active_students ?></span> &nbsp;
+          <span class="badge-inactive" id="stat-inactive-students">Inactive: <?= $inactive_students ?></span>
         </div>
       </div>
 
       <div class="info-card">
         <div class="card-label"><i class="fa-solid fa-clock" style="color:#f59e0b;"></i> Pending Applications</div>
-        <div class="card-amount" style="color:#f59e0b;"><?= $pending_enr ?></div>
+        <div class="card-amount" style="color:#f59e0b;" id="stat-pending-enr"><?= $pending_enr ?></div>
         <div class="card-detail">Awaiting validation</div>
         <a href="../enrollment_tab/validation.php" class="card-btn" style="margin-top:8px;">
           <i class="fa-solid fa-arrow-right"></i> Review
@@ -158,8 +158,8 @@ if ($r && $r->num_rows > 0) {
 
       <div class="info-card">
         <div class="card-label"><i class="fa-solid fa-id-badge" style="color:#2563eb;"></i> Enrolled Students</div>
-        <div class="card-amount" style="color:#2563eb;"><?= $enrolled_count ?></div>
-        <div class="card-detail"><?= $approved_enr ?> approved</div>
+        <div class="card-amount" style="color:#2563eb;" id="stat-enrolled-count"><?= $enrolled_count ?></div>
+        <div class="card-detail" id="stat-approved-enr"><?= $approved_enr ?> approved</div>
         <a href="../enrollment_tab/validation.php" class="card-btn" style="margin-top:8px;">
           <i class="fa-solid fa-arrow-right"></i> Manage
         </a>
@@ -167,7 +167,7 @@ if ($r && $r->num_rows > 0) {
 
       <div class="info-card">
         <div class="card-label"><i class="fa-solid fa-hourglass-half" style="color:#8b5cf6;"></i> Waiting List</div>
-        <div class="card-amount" style="color:#8b5cf6;"><?= $waiting_count ?></div>
+        <div class="card-amount" style="color:#8b5cf6;" id="stat-waiting-count"><?= $waiting_count ?></div>
         <div class="card-detail">Pending slot assignment</div>
         <a href="../enrollment_tab/waiting_list.php" class="card-btn" style="margin-top:8px;">
           <i class="fa-solid fa-arrow-right"></i> View
@@ -234,15 +234,15 @@ if ($r && $r->num_rows > 0) {
     <div class="info-row">
       <div class="info-card">
         <div class="card-label"><i class="fa-solid fa-file-pen" style="color:#2563eb;"></i> Total Applications</div>
-        <div class="card-amount"><?= $total_prereg_all ?></div>
+        <div class="card-amount" id="stat-total-prereg"><?= $total_prereg_all ?></div>
         <div class="card-detail">All pre-registrations</div>
-        <a href="../enrollment_tab/pre_registration.php" class="card-btn" style="margin-top:8px;">
+        <a href="../enrollment_tab/validation.php" class="card-btn" style="margin-top:8px;">
           <i class="fa-solid fa-arrow-right"></i> View
         </a>
       </div>
       <div class="info-card">
         <div class="card-label"><i class="fa-solid fa-circle-check" style="color:#16a34a;"></i> Approved</div>
-        <div class="card-amount" style="color:#16a34a;"><?= $approved_enr ?></div>
+        <div class="card-amount" style="color:#16a34a;" id="stat-approved-count"><?= $approved_enr ?></div>
         <div class="card-detail">Ready for enrollment</div>
         <a href="../enrollment_tab/validation.php" class="card-btn" style="margin-top:8px;">
           <i class="fa-solid fa-arrow-right"></i> View
@@ -250,7 +250,7 @@ if ($r && $r->num_rows > 0) {
       </div>
       <div class="info-card">
         <div class="card-label"><i class="fa-solid fa-chalkboard" style="color:#7c3aed;"></i> Active Sections</div>
-        <div class="card-amount" style="color:#7c3aed;"><?= $total_sections_db ?></div>
+        <div class="card-amount" style="color:#7c3aed;" id="stat-total-sections"><?= $total_sections_db ?></div>
         <div class="card-detail">Available sections</div>
         <a href="../enrollment_tab/section_assignment.php" class="card-btn" style="margin-top:8px;">
           <i class="fa-solid fa-arrow-right"></i> View
@@ -367,7 +367,7 @@ if ($r && $r->num_rows > 0) {
       </div>
       <table class="crud-table">
         <thead><tr><th>Name</th><th>Course</th><th>Status</th><th>Submitted</th></tr></thead>
-        <tbody>
+        <tbody id="recent-apps-tbody">
           <?php foreach ($recent_apps as $app):
             $sc = match($app['status']) { 'Approved' => 'badge-active', 'Rejected' => 'badge-inactive', default => '' };
             $ps = $app['status'] === 'Pending' ? 'background:#fff7ed;color:#d97706;padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:600;' : '';
@@ -484,6 +484,152 @@ if ($r && $r->num_rows > 0) {
 const STUDENT_API = 'students.php';
 </script>
 <script src="../js/dashboard.js"></script>
+<script>
+// ============================================================
+//  Live polling — updates stat cards, recent apps, and
+//  notification badge every 15 seconds without a page reload.
+// ============================================================
+(function () {
+    var STATS_API    = '../shared/dashboard_stats.php';
+    var INTERVAL_MS  = 15000; // 15 seconds
+    var _timer       = null;
+    var _prevStats   = {};   // track previous values for flash animation
+
+    // ── Flash animation on change ────────────────────────────
+    function flashEl(el) {
+        el.style.transition = 'none';
+        el.style.background = 'rgba(37,99,235,.12)';
+        el.style.borderRadius = '6px';
+        setTimeout(function () {
+            el.style.transition = 'background 0.8s ease';
+            el.style.background = '';
+        }, 50);
+        setTimeout(function () {
+            el.style.transition = '';
+        }, 900);
+    }
+
+    function setIfChanged(id, newVal, key) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        var changed = _prevStats[key] !== undefined && _prevStats[key] !== newVal;
+        el.textContent = newVal;
+        if (changed) flashEl(el);
+    }
+
+    // ── Patch stat cards ─────────────────────────────────────
+    function applyStats(s) {
+        setIfChanged('stat-total-students',  s.total_students,    'total_students');
+        setIfChanged('stat-enrolled-count',  s.enrolled_count,    'enrolled_count');
+        setIfChanged('stat-pending-enr',     s.pending_enr,       'pending_enr');
+        setIfChanged('stat-waiting-count',   s.waiting_count,     'waiting_count');
+        setIfChanged('stat-total-prereg',    s.total_prereg_all,  'total_prereg_all');
+        setIfChanged('stat-approved-count',  s.approved_enr,      'approved_enr');
+        setIfChanged('stat-total-sections',  s.total_sections,    'total_sections');
+
+        // Active/Inactive inline badges
+        var elA = document.getElementById('stat-active-students');
+        var elI = document.getElementById('stat-inactive-students');
+        if (elA) {
+            var newA = 'Active: ' + s.active_students;
+            if (_prevStats.active_students !== undefined && _prevStats.active_students !== s.active_students) flashEl(elA);
+            elA.textContent = newA;
+        }
+        if (elI) {
+            var newI = 'Inactive: ' + s.inactive_students;
+            if (_prevStats.inactive_students !== undefined && _prevStats.inactive_students !== s.inactive_students) flashEl(elI);
+            elI.textContent = newI;
+        }
+
+        // "X approved" detail under Enrolled card
+        var elAD = document.getElementById('stat-approved-enr');
+        if (elAD) elAD.textContent = s.approved_enr + ' approved';
+
+        _prevStats = Object.assign({}, s);
+    }
+
+    // ── Patch recent apps table ───────────────────────────────
+    function applyRecentApps(html) {
+        var tbody = document.getElementById('recent-apps-tbody');
+        if (!tbody || !html) return;
+        if (tbody.innerHTML.trim() !== html.trim()) {
+            tbody.style.transition = 'opacity 0.3s';
+            tbody.style.opacity = '0';
+            setTimeout(function () {
+                tbody.innerHTML = html;
+                tbody.style.opacity = '1';
+            }, 280);
+        }
+    }
+
+    // ── Patch notification badge ──────────────────────────────
+    function applyNotifBadge(count) {
+        var badge = document.getElementById('bellBadge');
+        if (!badge) return;
+        if (count > 0) {
+            badge.textContent = count > 99 ? '99+' : count;
+            badge.style.display = '';
+        } else {
+            badge.textContent = '';
+            badge.style.display = 'none';
+        }
+    }
+
+    // ── Patch notification panel items ────────────────────────
+    function applyNotifPanel(html) {
+        var list = document.getElementById('notifList');
+        if (!list || !html) return;
+        // Only update if the panel is currently closed (don't disrupt reading)
+        var panel = document.getElementById('notifPanel');
+        if (panel && panel.classList.contains('open')) return;
+        list.innerHTML = html;
+    }
+
+    // ── Main fetch ────────────────────────────────────────────
+    function poll() {
+        fetch(STATS_API, {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        })
+        .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function (data) {
+            if (data.error) return; // forbidden / session expired — stop silently
+            applyStats(data.stats);
+            applyRecentApps(data.recent_rows_html);
+            applyNotifBadge(data.notif_count);
+            applyNotifPanel(data.notif_html);
+        })
+        .catch(function () {
+            // Network hiccup — fail silently, try again next interval
+        });
+    }
+
+    // ── Start polling when page is visible ───────────────────
+    function startPolling() {
+        poll(); // immediate first fetch
+        _timer = setInterval(poll, INTERVAL_MS);
+    }
+
+    function stopPolling() {
+        if (_timer) { clearInterval(_timer); _timer = null; }
+    }
+
+    // Pause when tab is hidden, resume when visible — saves server load
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+            stopPolling();
+        } else {
+            startPolling();
+        }
+    });
+
+    startPolling();
+}());
+</script>
 </body>
 </html>
 <?php $conn->close(); ?>

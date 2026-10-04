@@ -17,6 +17,23 @@ if (enrollment_tables_exist($conn)) {
     $r = $conn->prepare("SELECT * FROM pre_registrations WHERE user_id=? ORDER BY submitted_at DESC LIMIT 1");
     $r->bind_param('i', $uid); $r->execute();
     $my_app = $r->get_result()->fetch_assoc(); $r->close();
+
+    // Fallback: find by email when user_id was NULL at submission time
+    if (!$my_app) {
+        $er = $conn->query("SELECT email FROM users WHERE id=$uid LIMIT 1");
+        if ($er && $erow = $er->fetch_assoc()) {
+            $esc_email = $conn->real_escape_string($erow['email']);
+            $r2 = $conn->query(
+                "SELECT * FROM pre_registrations
+                 WHERE email='$esc_email' AND (user_id IS NULL OR user_id=0)
+                 ORDER BY submitted_at DESC LIMIT 1"
+            );
+            if ($r2 && $my_app = $r2->fetch_assoc()) {
+                $conn->query("UPDATE pre_registrations SET user_id=$uid WHERE id=" . (int)$my_app['id']);
+            }
+        }
+    }
+
     if ($my_app) {
         $r2 = $conn->query("SELECT COUNT(*) c FROM enrollment_documents WHERE pre_reg_id={$my_app['id']}");
         if ($r2) $my_docs_count = (int)$r2->fetch_assoc()['c'];

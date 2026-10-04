@@ -15,7 +15,7 @@ if (empty($_SESSION['user_id'])) {
 
 $action  = $_POST['action'] ?? $_GET['action'] ?? '';
 $user_id = (int)$_SESSION['user_id'];
-$is_admin = ($_SESSION['role'] ?? '') === 'admin';
+$is_admin = in_array($_SESSION['role'] ?? '', ['admin', 'staff']);
 
 function respond(bool $ok, string $msg, array $extra = []): void {
     ob_clean(); // discard any PHP warnings before outputting JSON
@@ -39,7 +39,7 @@ case 'pre_register': {
     $transfer_yr    = trim($_POST['transfer_year_level'] ?? '');
 
     // Validate applicant_type
-    $valid_types = ['Freshman', 'Senior High', 'Octoberian', 'Transferee'];
+    $valid_types = ['Freshman', 'Senior High'];
     if (!$applicant_type || !in_array($applicant_type, $valid_types))
         respond(false, 'Please select an applicant type.');
 
@@ -54,7 +54,7 @@ case 'pre_register': {
     if ($applicant_type === 'Freshman') $year_level = '1st Year';
 
     // Ensure new columns exist (safe no-op)
-    @$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS applicant_type ENUM('Freshman','Senior High','Octoberian','Transferee') DEFAULT NULL");
+    @$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS applicant_type ENUM('Freshman','Senior High') DEFAULT NULL");
     @$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS transfer_year_level VARCHAR(50) DEFAULT NULL");
 
     // Check for existing pending application
@@ -320,9 +320,14 @@ case 'validate_application': {
     $t->bind_param('iss', $new_uid, $token, $expires); $t->execute(); $t->close();
 
     $protocol  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    // Also respect reverse-proxy header (Nginx / Cloudflare / shared hosting)
+    if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) {
+        $protocol = strtolower(trim(explode(',', $_SERVER['HTTP_X_FORWARDED_PROTO'])[0]));
+    }
     $host      = $_SERVER['HTTP_HOST'] ?? 'localhost';
     // Prefer APP_URL from .env; fall back to deriving from SCRIPT_NAME
     $_app_url  = '';
+
     $_env_file = __DIR__ . '/../.env';
     if (file_exists($_env_file)) {
         foreach (file($_env_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $_line) {
@@ -339,16 +344,26 @@ case 'validate_application': {
     }
     $login_url  = rtrim($_app_url, '/') . '/auth/login_via_token.php?token=' . $token;
 
-    // Send email (silently fails if SMTP not configured)
+    // Send welcome email with one-time login link
     $sc   = preg_replace('/Bachelor of Science in /i', 'BS ', $course);
     $body = email_template(
         'Your BCP Student Account is Ready!',
         "<p style='color:#333;font-size:14px;line-height:1.7;'>Dear <strong>$first $last</strong>,</p>
          <p style='color:#333;font-size:14px;line-height:1.7;'>Your application for <strong>$sc</strong> has been <strong style='color:#16a34a;'>approved</strong>. Your student account is ready.</p>
-         <p style='color:#333;font-size:14px;line-height:1.7;'><strong>Username:</strong> $username<br>Click the button below to set your password. Link expires in <strong>72 hours</strong>.</p>",
+         <p style='color:#333;font-size:14px;line-height:1.7;'><strong>Username:</strong> $username<br>Click the button below to set your password. This link expires in <strong>72 hours</strong> and can only be used once.</p>",
         $login_url, 'Set My Password &amp; Log In →'
     );
-    @send_email($email, 'Your BCP Student Portal Account', $body);
+
+    $email_sent  = false;
+    $email_error = '';
+    try {
+        send_email($email, 'Your BCP Student Portal Account is Ready', $body);
+        $email_sent = true;
+    } catch (Throwable $e) {
+        // Log the reason but don't abort — admin still gets the link to share manually
+        $email_error = $e->getMessage();
+        error_log('[BCP Mailer] Failed to send approval email to ' . $email . ': ' . $email_error);
+    }
 
     // ── Insert into students table (source of truth for the All Students page) ──
     // Only insert if not already present for this pre_registration.
@@ -381,6 +396,9 @@ case 'validate_application': {
         'login_url'    => $login_url,
         'username'     => $username,
         'student_name' => "$first $last",
+        'email_sent'   => $email_sent,
+        'email_to'     => $email,
+        'email_error'  => $email_error,
     ]);
 }
 case 'generate_id': {

@@ -1,75 +1,137 @@
 <?php
 // ============================================================
 //  DOCUMENT_REVIEW.PHP  (admin/)
-//  Admin view: all uploaded documents with AI inspection results
-//  shown in a structured template card.
+//  Two tabs: Document Generation | AI Inspection
+//  Each tab has its own search + filter.
 // ============================================================
 session_start();
 require_once __DIR__ . '/../shared/db.php';
-if (empty($_SESSION['user_id']))        { header('Location: ../auth/signin.php'); exit; }
-if ($_SESSION['role'] !== 'admin')      { header('Location: ../admin_dashboard/dashboard.php'); exit; }
-if (!enrollment_tables_exist($conn))    { header('Location: ../shared/full_setup.php'); exit; }
+if (empty($_SESSION['user_id']))     { header('Location: ../auth/signin.php'); exit; }
+if (!is_admin_or_staff())            { header('Location: ../auth/signin.php'); exit; }
+if (!enrollment_tables_exist($conn)) { header('Location: ../shared/full_setup.php'); exit; }
 
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'A', 0, 1));
 
-// ── Fetch all documents with applicant info ───────────────────
-$docs = [];
-// Ensure ai columns exist (suppressed — added during setup, safe to skip if already present)
 @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
 @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL");
 
-$res  = $conn->query(
-    "SELECT d.*,
-            COALESCE(p.first_name, 'Unknown') AS first_name,
-            COALESCE(p.last_name,  'Applicant') AS last_name,
-            COALESCE(p.email,      '—') AS email,
-            COALESCE(p.phone,      '—') AS phone,
-            COALESCE(p.course,     '—') AS course,
-            COALESCE(p.year_level, '—') AS year_level,
-            COALESCE(p.status,     'Pending') AS app_status,
-            p.submitted_at
-     FROM   enrollment_documents d
-     LEFT JOIN pre_registrations p ON d.pre_reg_id = p.id
-     ORDER  BY d.uploaded_at DESC"
-);
-if ($res) while ($r = $res->fetch_assoc()) $docs[] = $r;
-
-// Filter
-$filter_status = $_GET['status'] ?? '';
-$filter_type   = $_GET['type']   ?? '';
-if ($filter_status) $docs = array_filter($docs, fn($d) => $d['status'] === $filter_status);
-if ($filter_type)   $docs = array_filter($docs, fn($d) => $d['document_type'] === $filter_type);
-
-// ── Group docs by pre_reg_id so we can show one Generate button per applicant ──
-$by_applicant = [];
-foreach ($docs as $doc) {
-    $pid = (int)$doc['pre_reg_id'];
-    if (!isset($by_applicant[$pid])) {
-        $by_applicant[$pid] = [
-            'pre_reg_id' => $pid,
-            'first_name' => $doc['first_name'],
-            'last_name'  => $doc['last_name'],
-            'course'     => $doc['course'],
-            'types'      => [],          // doc types submitted
-            'all_approved' => true,      // flipped to false if any not Approved
-        ];
-    }
-    $by_applicant[$pid]['types'][] = $doc['document_type'];
-    if ($doc['status'] !== 'Approved') {
-        $by_applicant[$pid]['all_approved'] = false;
-    }
-}
-$required_doc_types = ['BirthCertificate', 'ReportCard', 'GoodMoral'];
+// ── Active tab ────────────────────────────────────────────────
+$active_tab = in_array($_GET['tab'] ?? '', ['generation','inspection']) ? $_GET['tab'] : 'generation';
 
 // ── Handle admin status update ────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['doc_id'])) {
-    $doc_id    = (int)$_POST['doc_id'];
+    $doc_id     = (int)$_POST['doc_id'];
     $new_status = in_array($_POST['new_status'] ?? '', ['Approved','Rejected','Pending'])
                   ? $_POST['new_status'] : 'Pending';
     $stmt = $conn->prepare("UPDATE enrollment_documents SET status=? WHERE id=?");
     $stmt->bind_param('si', $new_status, $doc_id);
     $stmt->execute(); $stmt->close();
-    header('Location: document_review.php'); exit;
+    header("Location: document_review.php?tab=$active_tab"); exit;
+}
+
+// ════════════════════════════════════════════════════
+//  TAB 1: DOCUMENT GENERATION
+// ════════════════════════════════════════════════════
+$gen_search = trim($_GET['gen_q']      ?? '');
+$gen_course = trim($_GET['gen_course'] ?? '');
+
+$gen_where = "1=1";
+if ($gen_search) {
+    $esc = $conn->real_escape_string($gen_search);
+    $gen_where .= " AND (p.first_name LIKE '%$esc%' OR p.last_name LIKE '%$esc%' OR p.ref_number LIKE '%$esc%')";
+}
+if ($gen_course) {
+    $esc = $conn->real_escape_string($gen_course);
+    $gen_where .= " AND p.course LIKE '%$esc%'";
+}
+
+// Fetch one row per applicant (use pre_reg_id grouping)
+$gen_data = [];
+$res = $conn->query(
+    "SELECT p.id AS pre_reg_id,
+            p.first_name, p.last_name, p.course, p.ref_number, p.status AS app_status,
+            COUNT(d.id) AS doc_count,
+            SUM(CASE WHEN d.status='Approved' THEN 1 ELSE 0 END) AS doc_approved,
+            GROUP_CONCAT(d.document_type) AS doc_types
+     FROM pre_registrations p
+     LEFT JOIN enrollment_documents d ON d.pre_reg_id = p.id
+     WHERE $gen_where
+     GROUP BY p.id
+     ORDER BY p.submitted_at DESC"
+);
+if ($res) while ($r = $res->fetch_assoc()) $gen_data[] = $r;
+
+$required_doc_types = ['BirthCertificate','ReportCard','GoodMoral'];
+
+// ════════════════════════════════════════════════════
+//  TAB 2: AI INSPECTION — student-centric view
+//  One row per applicant; clicking expands their docs
+// ════════════════════════════════════════════════════
+$ai_search  = trim($_GET['ai_q']      ?? '');
+$ai_status  = trim($_GET['ai_status'] ?? '');
+$ai_course  = trim($_GET['ai_course'] ?? '');
+$rows_pp    = 15;
+$ai_page    = max(1, (int)($_GET['ai_page'] ?? 1));
+
+// Build WHERE against pre_registrations
+$ai_where = "1=1";
+if ($ai_search) {
+    $esc = $conn->real_escape_string($ai_search);
+    $ai_where .= " AND (p.first_name LIKE '%$esc%' OR p.last_name LIKE '%$esc%' OR p.ref_number LIKE '%$esc%' OR p.email LIKE '%$esc%')";
+}
+if ($ai_course) {
+    $esc = $conn->real_escape_string($ai_course);
+    $ai_where .= " AND p.course LIKE '%$esc%'";
+}
+if ($ai_status) {
+    // filter by whether the student has at least one doc with this status
+    $esc = $conn->real_escape_string($ai_status);
+    $ai_where .= " AND EXISTS (SELECT 1 FROM enrollment_documents dx WHERE dx.pre_reg_id=p.id AND dx.status='$esc')";
+}
+
+// Count distinct applicants
+$ai_total = (int)$conn->query(
+    "SELECT COUNT(DISTINCT p.id) c FROM pre_registrations p WHERE $ai_where"
+)->fetch_assoc()['c'];
+
+$ai_pages = max(1, (int)ceil($ai_total / $rows_pp));
+$ai_page  = min($ai_page, $ai_pages);
+
+// Fetch applicants + aggregate doc info
+$ai_applicants = [];
+$res2 = $conn->query(
+    "SELECT p.id AS pre_reg_id,
+            p.first_name, p.last_name, p.email, p.phone,
+            p.course, p.year_level, p.ref_number,
+            p.status AS app_status, p.submitted_at,
+            COUNT(d.id) AS doc_count,
+            SUM(CASE WHEN d.ai_result IS NOT NULL THEN 1 ELSE 0 END) AS ai_count,
+            SUM(CASE WHEN d.status='Approved' THEN 1 ELSE 0 END) AS approved_count,
+            GROUP_CONCAT(d.document_type ORDER BY d.uploaded_at SEPARATOR ',') AS doc_types
+     FROM pre_registrations p
+     LEFT JOIN enrollment_documents d ON d.pre_reg_id = p.id
+     WHERE $ai_where
+     GROUP BY p.id
+     ORDER BY p.submitted_at DESC
+     LIMIT $rows_pp OFFSET " . (($ai_page - 1) * $rows_pp)
+);
+if ($res2) while ($r = $res2->fetch_assoc()) $ai_applicants[] = $r;
+
+// For each applicant, pre-fetch their documents
+$ai_docs_by_student = [];
+if ($ai_applicants) {
+    $pids = implode(',', array_map(fn($a)=>(int)$a['pre_reg_id'], $ai_applicants));
+    $res3 = $conn->query(
+        "SELECT d.*, p.first_name, p.last_name, p.course, p.email, p.phone,
+                p.status AS app_status, p.ref_number
+         FROM enrollment_documents d
+         LEFT JOIN pre_registrations p ON d.pre_reg_id = p.id
+         WHERE d.pre_reg_id IN ($pids)
+         ORDER BY d.pre_reg_id, d.uploaded_at ASC"
+    );
+    if ($res3) while ($r = $res3->fetch_assoc()) {
+        $ai_docs_by_student[$r['pre_reg_id']][] = $r;
+    }
 }
 
 $APP_ROOT   = '../';
@@ -84,82 +146,70 @@ $ACTIVE_NAV = 'documents';
   <link rel="stylesheet" href="../css/dashboard.css"/>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"/>
   <style>
+    /* ── Page tabs ── */
+    .page-tabs { display:flex; gap:0; border-bottom:2px solid #e5e7eb; margin:0 24px 20px; }
+    .page-tab {
+      padding:10px 22px; font-size:.88rem; font-weight:600; color:#888;
+      border:none; background:none; cursor:pointer; border-bottom:3px solid transparent;
+      margin-bottom:-2px; font-family:inherit; transition:color .15s,border-color .15s;
+    }
+    .page-tab.active { color:#1a3a8c; border-bottom-color:#1a3a8c; }
+    .page-tab:hover:not(.active) { color:#555; }
+    .tab-pane { display:none; }
+    .tab-pane.active { display:block; }
+
+    /* ── Doc cards ── */
     .doc-card {
-      background: #fff;
-      border-radius: 12px;
-      box-shadow: 0 2px 12px rgba(0,0,0,.08);
-      overflow: hidden;
-      margin-bottom: 20px;
+      background:#fff; border-radius:12px; box-shadow:0 2px 12px rgba(0,0,0,.08);
+      overflow:hidden; margin-bottom:20px;
     }
-    .doc-card-header {
-      padding: 14px 20px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-    .doc-card-header.authentic  { background: #f0fdf4; border-left: 5px solid #22c55e; }
-    .doc-card-header.fake       { background: #fff1f2; border-left: 5px solid #ef4444; }
-    .doc-card-header.uncertain  { background: #fffbeb; border-left: 5px solid #f59e0b; }
-    .doc-card-header.pending    { background: #f8fafc; border-left: 5px solid #94a3b8; }
-    .verdict-badge {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 5px 14px; border-radius: 20px;
-      font-size: .78rem; font-weight: 700;
-    }
+    .doc-card-header { padding:14px 20px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    .doc-card-header.authentic { background:#f0fdf4; border-left:5px solid #22c55e; }
+    .doc-card-header.fake      { background:#fff1f2; border-left:5px solid #ef4444; }
+    .doc-card-header.uncertain { background:#fffbeb; border-left:5px solid #f59e0b; }
+    .doc-card-header.pending   { background:#f8fafc; border-left:5px solid #94a3b8; }
+    .verdict-badge { display:inline-flex; align-items:center; gap:6px; padding:5px 14px; border-radius:20px; font-size:.78rem; font-weight:700; }
     .verdict-authentic { background:#dcfce7; color:#16a34a; }
     .verdict-fake      { background:#fee2e2; color:#dc2626; }
     .verdict-uncertain { background:#fff7ed; color:#d97706; }
     .verdict-pending   { background:#f1f5f9; color:#64748b; }
-    .doc-body   { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0; }
-    .doc-section { padding: 18px 20px; border-right: 1px solid #f0f2f5; }
-    .doc-section:last-child { border-right: none; }
-    .doc-section h4 {
-      font-size: .72rem; font-weight: 700; text-transform: uppercase;
-      color: #1a3a8c; letter-spacing: .04em; margin-bottom: 12px;
-      padding-bottom: 6px; border-bottom: 1.5px solid #eff6ff;
-    }
-    .doc-field { margin-bottom: 9px; }
-    .doc-field-label { font-size: .68rem; color: #aaa; font-weight: 600; text-transform: uppercase; margin-bottom: 2px; }
-    .doc-field-value { font-size: .82rem; color: #1a1a2e; font-weight: 500; }
-    .doc-field-value.empty { color: #ccc; font-style: italic; }
-    .red-flag-item {
-      background: #fff1f2; color: #dc2626; border-radius: 6px;
-      padding: 5px 10px; font-size: .75rem; margin-bottom: 5px;
-      display: flex; align-items: flex-start; gap: 6px;
-    }
-    .doc-footer { padding: 12px 20px; border-top: 1px solid #f0f2f5;
-                  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-    .confidence-bar { height: 6px; border-radius: 3px; background: #e2e8f0; flex: 1; min-width: 80px; }
-    .confidence-fill { height: 6px; border-radius: 3px; transition: width .3s; }
-    @media (max-width: 700px) { .doc-body { grid-template-columns: 1fr; } .doc-section { border-right: none; border-bottom: 1px solid #f0f2f5; } }
+    .doc-body { display:grid; grid-template-columns:1fr 1fr 1fr; gap:0; }
+    .doc-section { padding:18px 20px; border-right:1px solid #f0f2f5; }
+    .doc-section:last-child { border-right:none; }
+    .doc-section h4 { font-size:.72rem; font-weight:700; text-transform:uppercase; color:#1a3a8c; letter-spacing:.04em; margin-bottom:12px; padding-bottom:6px; border-bottom:1.5px solid #eff6ff; }
+    .doc-field { margin-bottom:9px; }
+    .doc-field-label { font-size:.68rem; color:#aaa; font-weight:600; text-transform:uppercase; margin-bottom:2px; }
+    .doc-field-value { font-size:.82rem; color:#1a1a2e; font-weight:500; }
+    .red-flag-item { background:#fff1f2; color:#dc2626; border-radius:6px; padding:5px 10px; font-size:.75rem; margin-bottom:5px; display:flex; align-items:flex-start; gap:6px; }
+    .doc-footer { padding:12px 20px; border-top:1px solid #f0f2f5; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+    .confidence-bar  { height:6px; border-radius:3px; background:#e2e8f0; flex:1; min-width:80px; }
+    .confidence-fill { height:6px; border-radius:3px; transition:width .3s; }
+    @media (max-width:700px) { .doc-body { grid-template-columns:1fr; } .doc-section { border-right:none; border-bottom:1px solid #f0f2f5; } }
 
-    /* Ensure button classes render correctly on this page */
+    /* ── Gen applicant card ── */
+    .gen-card { background:#fff; border:1.5px solid #e2e8f0; border-radius:10px; padding:14px 18px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+    .gen-card:hover { border-color:#bfdbfe; box-shadow:0 2px 12px rgba(37,99,235,.07); }
+
+    /* ── AI inspection: student rows ── */
+    .ai-student-row { background:#fff; border:1.5px solid #e5e7eb; border-radius:12px; margin-bottom:12px; overflow:hidden; transition:border-color .15s, box-shadow .15s; }
+    .ai-student-row:hover { border-color:#bfdbfe; }
+    .ai-student-header { padding:14px 18px; display:flex; align-items:center; gap:12px; }
+    .ai-student-header:hover { background:#f8fafc; }
+    .ai-student-docs { border-top:1.5px solid #e8edf4; }
+    .ai-doc-panel { padding:18px; border-bottom:1px solid #f0f2f5; }
+    .ai-doc-panel:last-child { border-bottom:none; }
+
+    /* ── Buttons ── */
     .btn-approve, .btn-reject, .btn-secondary, .btn-primary, .btn-view-file {
-      font-family: 'Segoe UI', sans-serif;
-      font-size: .82rem;
-      font-weight: 700;
-      cursor: pointer;
-      border: none;
-      border-radius: 8px;
-      padding: 8px 18px;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      text-decoration: none;
-      transition: background .15s, box-shadow .15s;
+      font-family:'Segoe UI',sans-serif; font-size:.82rem; font-weight:700; cursor:pointer;
+      border:none; border-radius:8px; padding:8px 18px;
+      display:inline-flex; align-items:center; gap:6px; text-decoration:none; transition:background .15s,box-shadow .15s;
     }
-    .btn-approve  { background: #16a34a; color: #fff; }
-    .btn-approve:hover  { background: #15803d; }
-    .btn-reject   { background: #ef4444; color: #fff; }
-    .btn-reject:hover   { background: #dc2626; }
-    .btn-primary  { background: #1a3a8c; color: #fff; }
-    .btn-primary:hover  { background: #142d6e; }
-    .btn-secondary { background: none; color: #555; border: 1.5px solid #d0d7e2; }
-    .btn-secondary:hover { background: #f0f4f8; }
-    .btn-view-file { background: #eff6ff; color: #2563eb; border: 1.5px solid #bfdbfe; font-weight: 600; }
-    .btn-view-file:hover { background: #dbeafe; }
+    .btn-approve  { background:#16a34a; color:#fff; } .btn-approve:hover  { background:#15803d; }
+    .btn-reject   { background:#ef4444; color:#fff; } .btn-reject:hover   { background:#dc2626; }
+    .btn-primary  { background:#1a3a8c; color:#fff; } .btn-primary:hover  { background:#142d6e; }
+    .btn-secondary{ background:none; color:#555; border:1.5px solid #d0d7e2; } .btn-secondary:hover { background:#f0f4f8; }
+    .btn-view-file{ background:#eff6ff; color:#2563eb; border:1.5px solid #bfdbfe; } .btn-view-file:hover { background:#dbeafe; }
   </style>
 </head>
 <body>
@@ -176,421 +226,378 @@ $ACTIVE_NAV = 'documents';
 
   <div class="content">
     <div class="page-title-bar">
-      <h2 class="page-title"><i class="fa-solid fa-file-shield"></i> Document Review — AI Inspection</h2>
+      <h2 class="page-title"><i class="fa-solid fa-file-shield"></i> Document Review</h2>
     </div>
 
-    <!-- Feedback from re-inspection -->
     <?php if (isset($_GET['ai_done'])): ?>
     <div class="auth-success" style="margin:0 24px 16px;">
-      <i class="fa-solid fa-robot"></i>
-      AI inspection complete for document #<?= (int)$_GET['ai_done'] ?>.
-      Results are shown in the card below.
+      <i class="fa-solid fa-robot"></i> AI inspection complete for document #<?= (int)$_GET['ai_done'] ?>.
     </div>
     <?php endif; ?>
     <?php if (isset($_GET['ai_err'])): ?>
     <div class="auth-error" style="margin:0 24px 16px;">
-      <i class="fa-solid fa-circle-xmark"></i>
-      AI inspection failed: <?= htmlspecialchars(urldecode($_GET['ai_err'])) ?>
+      <i class="fa-solid fa-circle-xmark"></i> AI inspection failed: <?= htmlspecialchars(urldecode($_GET['ai_err'])) ?>
     </div>
     <?php endif; ?>
 
-    <!-- Filters -->
-    <div style="padding:0 24px 16px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-      <a href="?status=&type="    class="pg-btn <?= !$filter_status&&!$filter_type?'active':'' ?>">All</a>
-      <a href="?status=Pending"   class="pg-btn <?= $filter_status==='Pending'?'active':'' ?>">Pending</a>
-      <a href="?status=Approved"  class="pg-btn <?= $filter_status==='Approved'?'active':'' ?>">Approved</a>
-      <a href="?status=Rejected"  class="pg-btn <?= $filter_status==='Rejected'?'active':'' ?>">Rejected</a>
-      <span style="color:#aaa;font-size:.8rem;"><?= count($docs) ?> document<?= count($docs)!==1?'s':'' ?></span>
+    <!-- ── Tab bar ── -->
+    <div class="page-tabs">
+      <button class="page-tab <?= $active_tab==='generation'?'active':'' ?>"
+              onclick="switchTab('generation')">
+        <i class="fa-solid fa-file-word"></i> Document Generation
+      </button>
+      <button class="page-tab <?= $active_tab==='inspection'?'active':'' ?>"
+              onclick="switchTab('inspection')">
+        <i class="fa-solid fa-robot"></i> AI Inspection
+      </button>
     </div>
 
-    <div style="padding:0 24px;">
+    <!-- ══════════════════════════════════════════════
+         TAB 1: DOCUMENT GENERATION
+    ══════════════════════════════════════════════ -->
+    <div id="tab-generation" class="tab-pane <?= $active_tab==='generation'?'active':'' ?>">
 
-      <!-- ── Per-applicant Generate Document panels ── -->
-      <?php foreach ($by_applicant as $pid => $appl):
-        $has_all = count(array_intersect($required_doc_types, $appl['types'])) === 3;
-        $all_apv = $appl['all_approved'];
-        $appl_name = htmlspecialchars(trim($appl['first_name'] . ' ' . $appl['last_name']));
-      ?>
-      <div style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:10px;
-                  padding:14px 18px;margin-bottom:14px;display:flex;
-                  align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
-        <div>
-          <div style="font-weight:700;font-size:.92rem;color:#1a1a2e;">
-            <i class="fa-solid fa-user-graduate" style="color:#1a3a8c;margin-right:6px;"></i>
-            <?= $appl_name ?>
-            <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;">
-              — <?= htmlspecialchars($appl['course']) ?>
-            </span>
-          </div>
-          <div style="font-size:.75rem;color:#888;margin-top:4px;">
-            <?php foreach ($required_doc_types as $rtype):
-              $submitted = in_array($rtype, $appl['types']);
-              $labels    = ['BirthCertificate'=>'Birth Cert','ReportCard'=>'Report Card','GoodMoral'=>'Good Moral'];
-              $color     = $submitted ? '#16a34a' : '#dc2626';
-              $icon      = $submitted ? 'fa-circle-check' : 'fa-circle-xmark';
-            ?>
-            <span style="margin-right:12px;color:<?= $color ?>;">
-              <i class="fa-solid <?= $icon ?>"></i> <?= $labels[$rtype] ?>
-            </span>
-            <?php endforeach; ?>
-          </div>
+      <!-- Search + filter -->
+      <form method="GET" style="padding:0 24px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <input type="hidden" name="tab" value="generation"/>
+        <div class="search-wrap" style="flex:1;min-width:200px;max-width:340px;">
+          <input type="text" name="gen_q" value="<?= htmlspecialchars($gen_search) ?>"
+                 placeholder="Search applicant name or reference…"/>
+          <i class="fa-solid fa-magnifying-glass"></i>
         </div>
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <?php if (!$has_all): ?>
-          <span style="font-size:.78rem;color:#d97706;font-weight:600;">
-            <i class="fa-solid fa-triangle-exclamation"></i>
-            Missing <?= 3 - count(array_intersect($required_doc_types, $appl['types'])) ?> required document(s)
-          </span>
-          <?php elseif (!$all_apv): ?>
-          <span style="font-size:.78rem;color:#2563eb;font-weight:600;">
-            <i class="fa-solid fa-circle-info"></i>
-            All 3 docs present — approve all to enable generation
-          </span>
-          <?php endif; ?>
-          <!-- Generate button: enabled only when all 3 present (approval optional but shown) -->
-          <button class="btn-primary btn-generate-doc"
-                  data-pre-reg-id="<?= $pid ?>"
-                  data-name="<?= $appl_name ?>"
-                  <?= !$has_all ? 'disabled style="opacity:.45;cursor:not-allowed;"' : '' ?>>
-            <i class="fa-solid fa-file-word"></i> Generate Document
-          </button>
+        <select name="gen_course" style="height:36px;border:1px solid #ddd;border-radius:8px;padding:0 10px;font-size:.82rem;background:#fff;">
+          <option value="">All Courses</option>
+          <?php foreach(['Information Technology','Computer Engineering','Psychology','Elementary Education','Secondary Education','Criminology','Entrepreneurship','Marketing Management','Human Resource Management','Financial Management','Office Administration','Tourism Management','Hospitality Management'] as $c): ?>
+          <option value="<?= $c ?>" <?= str_contains($gen_course,$c)?'selected':'' ?>><?= $c ?></option>
+          <?php endforeach; ?>
+        </select>
+        <button type="submit" class="btn-primary" style="padding:7px 16px;font-size:.82rem;">
+          <i class="fa-solid fa-filter"></i> Filter
+        </button>
+        <?php if($gen_search||$gen_course): ?>
+        <a href="?tab=generation" style="padding:7px 12px;font-size:.82rem;border:1.5px solid #d0d7e2;border-radius:8px;color:#555;text-decoration:none;">Clear</a>
+        <?php endif; ?>
+        <span style="font-size:.78rem;color:#aaa;"><?= count($gen_data) ?> applicant<?= count($gen_data)!==1?'s':'' ?></span>
+      </form>
+
+      <div style="padding:0 24px;">
+        <?php if (empty($gen_data)): ?>
+        <div class="crud-card" style="text-align:center;padding:40px;color:#aaa;">
+          <i class="fa-solid fa-folder-open" style="font-size:2rem;display:block;margin-bottom:12px;"></i>
+          No applicants found.
         </div>
-      </div>
-      <?php endforeach; ?>
+        <?php endif; ?>
 
-      <?php if (empty($by_applicant)): ?>
-      <div class="crud-card" style="text-align:center;padding:40px;color:#aaa;">
-        <i class="fa-solid fa-folder-open" style="font-size:2rem;margin-bottom:12px;display:block;"></i>
-        No documents found<?= $filter_status ? " with status \"$filter_status\"" : '' ?>.
-      </div>
-      <?php endif; ?>
-
-      <?php foreach ($docs as $doc):
-        // Parse stored AI result from notes field (we store JSON there)
-        $ai   = null;
-        $notes_raw = $doc['status'] === 'Pending' ? null : null; // fetched below
-        // AI result is stored in the session during upload — for DB-persisted docs
-        // we store the JSON in a dedicated column (add via ALTER or use notes as fallback)
-        // Here we show what's in the DB + parse any JSON stored in file_name notes col
-
-        $verdict      = 'pending';   // default
-        $conf         = 0;
-        $extracted    = [];
-        $red_flags    = [];
-        $ai_notes     = '';
-        $doc_detected = $doc['document_type'];
-
-        // Header color class
-        $header_cls   = 'pending';
-        $verdict_cls  = 'verdict-pending';
-        $verdict_text = 'Pending Review';
-        $verdict_icon = 'fa-clock';
-
-        if ($doc['status'] === 'Approved') {
-            $header_cls   = 'authentic';
-            $verdict_cls  = 'verdict-authentic';
-            $verdict_text = 'Approved';
-            $verdict_icon = 'fa-circle-check';
-        } elseif ($doc['status'] === 'Rejected') {
-            $header_cls   = 'fake';
-            $verdict_cls  = 'verdict-fake';
-            $verdict_text = 'Rejected';
-            $verdict_icon = 'fa-circle-xmark';
-        }
-
-        $full_name = htmlspecialchars(trim($doc['first_name'] . ' ' . $doc['last_name']));
-      ?>
-
-      <!-- ── Document Card ── -->
-      <div class="doc-card">
-
-        <!-- Card header -->
-        <div class="doc-card-header <?= $header_cls ?>">
+        <?php foreach ($gen_data as $appl):
+          $appl_types = $appl['doc_types'] ? explode(',', $appl['doc_types']) : [];
+          $has_all    = count(array_intersect($required_doc_types, $appl_types)) === 3;
+          $all_apv    = (int)$appl['doc_approved'] >= (int)$appl['doc_count'] && $appl['doc_count'] > 0;
+          $appl_name  = htmlspecialchars(trim($appl['first_name'].' '.$appl['last_name']));
+          $sc = match($appl['app_status']) {
+              'Approved'=>'#22c55e','Enrolled'=>'#2563eb','Rejected'=>'#ef4444',default=>'#f59e0b'
+          };
+        ?>
+        <div class="gen-card">
           <div>
-            <div style="font-weight:700;font-size:.92rem;color:#1a1a2e;margin-bottom:3px;">
-              <i class="fa-solid fa-file-lines" style="color:#1a3a8c;margin-right:6px;"></i>
-              <?= htmlspecialchars($doc['document_type']) ?>
-              <span style="font-size:.75rem;color:#888;margin-left:8px;">
-                #<?= $doc['id'] ?>
+            <div style="font-weight:700;font-size:.92rem;color:#1a1a2e;margin-bottom:4px;">
+              <?= $appl_name ?>
+              <span style="font-size:.72rem;font-weight:400;color:#aaa;margin-left:6px;">
+                <?= htmlspecialchars($appl['ref_number'] ?? '—') ?>
+              </span>
+              <span style="font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:20px;
+                           background:<?= $sc ?>18;color:<?= $sc ?>;margin-left:6px;">
+                <?= htmlspecialchars($appl['app_status']) ?>
               </span>
             </div>
-            <div style="font-size:.78rem;color:#666;">
-              Applicant: <strong><?= $full_name ?></strong>
-              &nbsp;·&nbsp;
-              <?= htmlspecialchars($doc['course'] ?? '—') ?>
-              &nbsp;·&nbsp;
-              Uploaded: <?= date('M d, Y g:i A', strtotime($doc['uploaded_at'])) ?>
+            <div style="font-size:.78rem;color:#888;margin-bottom:6px;">
+              <?= htmlspecialchars(preg_replace('/Bachelor of Science in /i','BS ',$appl['course'])) ?>
             </div>
-          </div>
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-            <span class="verdict-badge <?= $verdict_cls ?>">
-              <i class="fa-solid <?= $verdict_icon ?>"></i>
-              <?= $verdict_text ?>
-            </span>
-            <!-- Admin approval actions -->
-            <form method="POST" class="doc-status-form" style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap;">
-              <input type="hidden" name="doc_id" value="<?= $doc['id'] ?>"/>
-              <input type="hidden" name="new_status" value=""/>
-              <?php if ($doc['status'] !== 'Approved'): ?>
-              <button type="button"
-                      class="btn-approve btn-doc-apv"
-                      data-doc-id="<?= $doc['id'] ?>" data-status="Approved">
-                <i class="fa-solid fa-circle-check"></i> Approve
-              </button>
-              <?php else: ?>
-              <span class="btn-approve" style="opacity:.7;cursor:default;">
-                <i class="fa-solid fa-circle-check"></i> Approved
-              </span>
-              <?php endif; ?>
-
-              <?php if ($doc['status'] !== 'Rejected'): ?>
-              <button type="button"
-                      class="btn-reject btn-doc-rej"
-                      data-doc-id="<?= $doc['id'] ?>" data-status="Rejected">
-                <i class="fa-solid fa-circle-xmark"></i> Reject
-              </button>
-              <?php else: ?>
-              <span class="btn-reject" style="opacity:.7;cursor:default;">
-                <i class="fa-solid fa-circle-xmark"></i> Rejected
-              </span>
-              <?php endif; ?>
-
-              <?php if ($doc['status'] !== 'Pending'): ?>
-              <button type="submit" name="new_status" value="Pending"
-                      class="btn-secondary">
-                Reset
-              </button>
-              <?php endif; ?>
-            </form>
-          </div>
-        </div>
-
-        <!-- Card body — three columns -->
-        <div class="doc-body">
-
-          <!-- Column 1: Applicant Info -->
-          <div class="doc-section">
-            <h4><i class="fa-solid fa-user"></i> Applicant</h4>
-            <div class="doc-field">
-              <div class="doc-field-label">Full Name</div>
-              <div class="doc-field-value"><?= $full_name ?></div>
-            </div>
-            <div class="doc-field">
-              <div class="doc-field-label">Email</div>
-              <div class="doc-field-value"><?= htmlspecialchars($doc['email'] ?? '—') ?></div>
-            </div>
-            <div class="doc-field">
-              <div class="doc-field-label">Phone</div>
-              <div class="doc-field-value"><?= htmlspecialchars($doc['phone'] ?? '—') ?></div>
-            </div>
-            <div class="doc-field">
-              <div class="doc-field-label">Course</div>
-              <div class="doc-field-value" style="font-size:.75rem;">
-                <?= htmlspecialchars($doc['course'] ?? '—') ?>
-              </div>
-            </div>
-            <div class="doc-field">
-              <div class="doc-field-label">Application Status</div>
-              <div class="doc-field-value">
-                <span class="badge-<?= strtolower($doc['app_status']) ?>">
-                  <?= htmlspecialchars($doc['app_status']) ?>
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Column 2: Document Info -->
-          <div class="doc-section">
-            <h4><i class="fa-solid fa-file-lines"></i> Document</h4>
-            <div class="doc-field">
-              <div class="doc-field-label">Type</div>
-              <div class="doc-field-value"><?= htmlspecialchars($doc['document_type']) ?></div>
-            </div>
-            <div class="doc-field">
-              <div class="doc-field-label">File Name</div>
-              <div class="doc-field-value" style="font-size:.75rem;word-break:break-all;">
-                <?= htmlspecialchars($doc['file_name']) ?>
-              </div>
-            </div>
-            <div class="doc-field">
-              <div class="doc-field-label">File Size</div>
-              <div class="doc-field-value"><?= round($doc['file_size'] / 1024, 1) ?> KB</div>
-            </div>
-            <div class="doc-field">
-              <div class="doc-field-label">Uploaded</div>
-              <div class="doc-field-value" style="font-size:.75rem;">
-                <?= date('M d, Y g:i A', strtotime($doc['uploaded_at'])) ?>
-              </div>
-            </div>
-            <div class="doc-field" style="margin-top:12px;">
-              <a href="../requirements/file.php?path=<?= urlencode($doc['file_path']) ?>"
-                 target="_blank" class="btn-view-file">
-                <i class="fa-solid fa-eye"></i> View File
-              </a>
-            </div>
-          </div>
-
-          <!-- Column 3: AI Inspection Results -->
-          <div class="doc-section">
-            <h4><i class="fa-solid fa-robot"></i> AI Inspection</h4>
-            <?php
-            // Parse ai_result JSON stored in DB
-            $ai_raw = $doc['ai_result'] ?? null;
-            $ai     = $ai_raw ? json_decode($ai_raw, true) : null;
-            $ext    = &$extracted; // reuse extracted var name
-            $ext    = $ai['extracted'] ?? [];
-
-            if ($ai):
-              $is_auth  = $ai['is_authentic'] ?? 'uncertain';
-              $ai_conf  = (int)($ai['confidence'] ?? 0);
-              $ai_notes = $ai['notes']     ?? '';
-              $ai_flags = $ai['red_flags'] ?? [];
-              $ai_model = $ai['model']     ?? 'gpt-4o';
-              $ai_time  = $ai['inspected_at'] ?? '';
-
-              $conf_color = $ai_conf >= 80 ? '#22c55e' : ($ai_conf >= 50 ? '#f59e0b' : '#ef4444');
-            ?>
-            <!-- Verdict + Confidence -->
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
-              <?php if ($is_auth === true): ?>
-                <span class="verdict-badge verdict-authentic">
-                  <i class="fa-solid fa-circle-check"></i> Authentic
-                </span>
-              <?php elseif ($is_auth === false): ?>
-                <span class="verdict-badge verdict-fake">
-                  <i class="fa-solid fa-circle-xmark"></i> Fake / Altered
-                </span>
-              <?php else: ?>
-                <span class="verdict-badge verdict-uncertain">
-                  <i class="fa-solid fa-circle-question"></i> Uncertain
-                </span>
-              <?php endif; ?>
-              <div style="flex:1;min-width:80px;">
-                <div style="font-size:.68rem;color:#aaa;margin-bottom:3px;">
-                  Confidence: <strong style="color:<?= $conf_color ?>"><?= $ai_conf ?>%</strong>
-                </div>
-                <div class="confidence-bar">
-                  <div class="confidence-fill"
-                       style="width:<?= $ai_conf ?>%;background:<?= $conf_color ?>;"></div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Notes -->
-            <?php if ($ai_notes): ?>
-            <div class="doc-field">
-              <div class="doc-field-label">AI Notes</div>
-              <div style="font-size:.78rem;color:#555;line-height:1.55;background:#f8fafc;
-                          border-radius:6px;padding:8px 10px;border-left:3px solid #2563eb;">
-                <?= htmlspecialchars($ai_notes) ?>
-              </div>
-            </div>
-            <?php endif; ?>
-
-            <!-- Red flags -->
-            <?php if (!empty($ai_flags)): ?>
-            <div class="doc-field" style="margin-top:10px;">
-              <div class="doc-field-label" style="color:#dc2626;">
-                <i class="fa-solid fa-triangle-exclamation"></i> Red Flags
-              </div>
-              <?php foreach ($ai_flags as $flag): ?>
-              <div class="red-flag-item">
-                <i class="fa-solid fa-xmark" style="margin-top:1px;flex-shrink:0;"></i>
-                <?= htmlspecialchars($flag) ?>
-              </div>
-              <?php endforeach; ?>
-            </div>
-            <?php endif; ?>
-
-            <!-- Extracted data -->
-            <?php if (!empty($ext)): ?>
-            <div style="margin-top:12px;border-top:1px solid #f0f2f5;padding-top:10px;">
-              <div class="doc-field-label" style="margin-bottom:8px;">
-                <i class="fa-solid fa-id-card"></i> Extracted Data
-              </div>
-              <?php
-              $fields_map = [
-                'full_name'           => 'Full Name',
-                'last_name'           => 'Last Name',
-                'first_name'          => 'First Name',
-                'middle_name'         => 'Middle Name',
-                'date_of_birth'       => 'Date of Birth',
-                'place_of_birth'      => 'Place of Birth',
-                'sex'                 => 'Sex / Gender',
-                'nationality'         => 'Nationality',
-                'registration_number' => 'Registration No.',
-                'date_issued'         => 'Date Issued',
-                'issuing_authority'   => 'Issuing Authority',
-                // Birth Certificate
-                'name_of_mother'      => "Mother's Name",
-                'name_of_father'      => "Father's Name",
-                // Report Card
-                'lrn'                 => 'LRN',
-                'school_name'         => 'School',
-                'school_year'         => 'School Year',
-                'grade_level'         => 'Grade Level',
-                'strand_or_track'     => 'Strand / Track',
-                'general_average'     => 'General Average',
-                'class_adviser'       => 'Class Adviser',
-                'principal'           => 'Principal',
-                // Good Moral
-                'issuing_school'      => 'Issuing School',
-                'purpose'             => 'Purpose',
-                'year_graduated'      => 'Year Graduated',
-                // Catch-all
-                'other_details'       => 'Other Details',
-              ];
-              foreach ($fields_map as $key => $label):
-                $val = $ext[$key] ?? null;
-                if (!$val) continue;
+            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+              <?php foreach($required_doc_types as $rtype):
+                $submitted = in_array($rtype, $appl_types);
+                $labels = ['BirthCertificate'=>'Birth Cert','ReportCard'=>'Report Card','GoodMoral'=>'Good Moral'];
+                $clr    = $submitted ? '#16a34a' : '#dc2626';
+                $ico    = $submitted ? 'fa-circle-check' : 'fa-circle-xmark';
               ?>
-              <div class="doc-field">
-                <div class="doc-field-label"><?= $label ?></div>
-                <div class="doc-field-value"><?= htmlspecialchars($val) ?></div>
-              </div>
+              <span style="font-size:.75rem;color:<?= $clr ?>;">
+                <i class="fa-solid <?= $ico ?>"></i> <?= $labels[$rtype] ?>
+              </span>
               <?php endforeach; ?>
             </div>
-            <?php endif; ?>
-
-            <div style="font-size:.68rem;color:#ccc;margin-top:10px;">
-              Model: <?= htmlspecialchars($ai_model) ?>
-              <?php if ($ai_time): ?>
-                &nbsp;·&nbsp; <?= date('M d, Y g:i A', strtotime($ai_time)) ?>
-              <?php endif; ?>
-            </div>
-
-            <?php else: ?>
-            <div style="font-size:.8rem;color:#aaa;font-style:italic;line-height:1.7;">
-              <i class="fa-solid fa-robot"></i>
-              This document has not been AI-inspected yet.<br>
-              Click <strong>Re-Inspect with AI</strong> below to analyze it.
-            </div>
-            <?php endif; ?>
           </div>
-
-        </div><!-- end doc-body -->
-
-        <!-- Card footer -->
-        <div class="doc-footer">
-          <div style="font-size:.75rem;color:#aaa;">
-            Document ID: <?= $doc['id'] ?>
-            &nbsp;·&nbsp; Pre-Reg ID: <?= $doc['pre_reg_id'] ?>
-          </div>
-          <form method="POST" action="ai_reinspect.php"
-                style="display:inline-flex;gap:8px;align-items:center;">
-            <input type="hidden" name="doc_id"    value="<?= $doc['id'] ?>"/>
-            <input type="hidden" name="file_path" value="<?= htmlspecialchars($doc['file_path']) ?>"/>
-            <input type="hidden" name="doc_type"  value="<?= htmlspecialchars($doc['document_type']) ?>"/>
-            <button type="submit" class="btn-primary">
-              <i class="fa-solid fa-robot"></i> Re-Inspect with AI
+          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+            <?php if (!$has_all): ?>
+            <span style="font-size:.78rem;color:#d97706;">
+              Missing <?= 3 - count(array_intersect($required_doc_types,$appl_types)) ?> doc(s)
+            </span>
+            <?php endif; ?>
+            <button class="btn-primary btn-generate-doc"
+                    data-pre-reg-id="<?= $appl['pre_reg_id'] ?>"
+                    data-name="<?= $appl_name ?>"
+                    <?= !$has_all ? 'disabled style="opacity:.45;cursor:not-allowed;"' : '' ?>>
+              <i class="fa-solid fa-file-word"></i> Generate
             </button>
-          </form>
+          </div>
         </div>
+        <?php endforeach; ?>
+      </div>
+    </div><!-- end tab-generation -->
 
-      </div><!-- end doc-card -->
-      <?php endforeach; ?>
+    <!-- ══════════════════════════════════════════════
+         TAB 2: AI INSPECTION
+    ══════════════════════════════════════════════ -->
+    <div id="tab-inspection" class="tab-pane <?= $active_tab==='inspection'?'active':'' ?>">
 
-    </div>
+      <!-- Search + filters -->
+      <form method="GET" style="padding:0 24px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <input type="hidden" name="tab" value="inspection"/>
+        <div class="search-wrap" style="flex:1;min-width:200px;max-width:300px;">
+          <input type="text" name="ai_q" value="<?= htmlspecialchars($ai_search) ?>"
+                 placeholder="Search applicant name or ref…"/>
+          <i class="fa-solid fa-magnifying-glass"></i>
+        </div>
+        <select name="ai_status" style="height:36px;border:1px solid #ddd;border-radius:8px;padding:0 10px;font-size:.82rem;background:#fff;">
+          <option value="">All Doc Statuses</option>
+          <?php foreach(['Pending','Approved','Rejected'] as $s): ?>
+          <option value="<?= $s ?>" <?= $ai_status===$s?'selected':'' ?>><?= $s ?></option>
+          <?php endforeach; ?>
+        </select>
+        <select name="ai_course" style="height:36px;border:1px solid #ddd;border-radius:8px;padding:0 10px;font-size:.82rem;background:#fff;max-width:200px;">
+          <option value="">All Courses</option>
+          <?php foreach(['Information Technology','Computer Engineering','Psychology','Elementary Education','Secondary Education','Criminology','Entrepreneurship','Marketing Management','Human Resource Management','Financial Management','Office Administration','Tourism Management','Hospitality Management'] as $c): ?>
+          <option value="<?= $c ?>" <?= str_contains($ai_course,$c)?'selected':'' ?>><?= $c ?></option>
+          <?php endforeach; ?>
+        </select>
+        <button type="submit" class="btn-primary" style="padding:7px 16px;font-size:.82rem;">
+          <i class="fa-solid fa-filter"></i> Filter
+        </button>
+        <?php if($ai_search||$ai_status||$ai_course): ?>
+        <a href="?tab=inspection" style="padding:7px 12px;font-size:.82rem;border:1.5px solid #d0d7e2;border-radius:8px;color:#555;text-decoration:none;">Clear</a>
+        <?php endif; ?>
+        <span style="font-size:.78rem;color:#aaa;"><?= $ai_total ?> student<?= $ai_total!==1?'s':'' ?></span>
+      </form>
+
+      <div style="padding:0 24px;">
+        <?php if (empty($ai_applicants)): ?>
+        <div class="crud-card" style="text-align:center;padding:40px;color:#aaa;">
+          <i class="fa-solid fa-users" style="font-size:2rem;display:block;margin-bottom:12px;"></i>
+          No students found.
+        </div>
+        <?php endif; ?>
+
+        <?php foreach ($ai_applicants as $appl):
+          $pid       = (int)$appl['pre_reg_id'];
+          $full_name = htmlspecialchars(trim($appl['first_name'].' '.$appl['last_name']));
+          $course_short = htmlspecialchars(preg_replace('/Bachelor of Science in |Bachelor of |Bachelor in /i','BS ',$appl['course']));
+          $docs_for  = $ai_docs_by_student[$pid] ?? [];
+          $sc = match($appl['app_status']) {
+              'Approved'=>'#22c55e','Enrolled'=>'#2563eb','Rejected'=>'#ef4444',default=>'#f59e0b'
+          };
+          $ai_done   = (int)$appl['ai_count'];
+          $doc_total = (int)$appl['doc_count'];
+        ?>
+        <!-- ── Student row (click to expand) ── -->
+        <div class="ai-student-row" id="airow-<?= $pid ?>">
+
+          <!-- Summary header — always visible -->
+          <div class="ai-student-header" onclick="toggleAiStudent(<?= $pid ?>)" style="cursor:pointer;">
+            <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;flex-wrap:wrap;">
+              <div style="width:38px;height:38px;border-radius:50%;background:#eff6ff;
+                          display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                <i class="fa-solid fa-user-graduate" style="color:#1a3a8c;font-size:1rem;"></i>
+              </div>
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:700;font-size:.92rem;color:#1a1a2e;">
+                  <?= $full_name ?>
+                  <span style="font-size:.72rem;font-weight:400;color:#aaa;margin-left:8px;">
+                    <?= htmlspecialchars($appl['ref_number'] ?? '—') ?>
+                  </span>
+                </div>
+                <div style="font-size:.78rem;color:#888;margin-top:2px;"><?= $course_short ?></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0;">
+                <span style="font-size:.72rem;font-weight:700;padding:3px 10px;border-radius:20px;
+                             background:<?= $sc ?>18;color:<?= $sc ?>;">
+                  <?= htmlspecialchars($appl['app_status']) ?>
+                </span>
+                <span style="font-size:.75rem;color:#888;">
+                  <?= $doc_total ?> doc<?= $doc_total!==1?'s':'' ?>
+                  <?php if ($doc_total > 0): ?>
+                  &nbsp;·&nbsp;
+                  <?php if ($ai_done === $doc_total): ?>
+                    <span style="color:#16a34a;font-weight:600;"><i class="fa-solid fa-robot"></i> All inspected</span>
+                  <?php elseif ($ai_done > 0): ?>
+                    <span style="color:#d97706;font-weight:600;"><i class="fa-solid fa-robot"></i> <?= $ai_done ?>/<?= $doc_total ?> inspected</span>
+                  <?php else: ?>
+                    <span style="color:#aaa;"><i class="fa-solid fa-robot"></i> Not inspected</span>
+                  <?php endif; ?>
+                  <?php endif; ?>
+                </span>
+                <i class="fa-solid fa-chevron-down ai-chevron" id="chev-<?= $pid ?>"
+                   style="color:#aaa;font-size:.78rem;transition:transform .2s;"></i>
+              </div>
+            </div>
+          </div>
+
+          <!-- Expanded document panels -->
+          <div class="ai-student-docs" id="aidocs-<?= $pid ?>" style="display:none;">
+            <?php if (empty($docs_for)): ?>
+            <div style="padding:20px;text-align:center;color:#aaa;font-size:.85rem;">
+              No documents uploaded yet.
+            </div>
+            <?php else: foreach ($docs_for as $doc):
+              $ai_raw  = $doc['ai_result'] ?? null;
+              $ai      = $ai_raw ? json_decode($ai_raw, true) : null;
+              $is_auth = $ai['is_authentic'] ?? null;
+              $ai_conf = (int)($ai['confidence'] ?? 0);
+              $ai_notes_txt = $ai['notes'] ?? '';
+              $ai_flags     = $ai['red_flags'] ?? [];
+              $ai_model     = $ai['model'] ?? 'gpt-4o';
+              $ai_time      = $ai['inspected_at'] ?? '';
+              $blur         = $ai['image_blur'] ?? null;
+              $align_ok     = $ai['alignment_ok'] ?? null;
+              $align_notes  = $ai['alignment_notes'] ?? '';
+              $legit        = $ai['is_legitimate'] ?? null;
+              $legit_notes  = $ai['legitimacy_notes'] ?? '';
+
+              $conf_color = $ai_conf>=80?'#22c55e':($ai_conf>=50?'#f59e0b':'#ef4444');
+
+              $doc_labels = ['BirthCertificate'=>'PSA Birth Certificate','ReportCard'=>'Report Card (Form 138)','GoodMoral'=>'Good Moral Certificate'];
+              $dlabel = $doc_labels[$doc['document_type']] ?? $doc['document_type'];
+
+              // Status badge colors
+              $dsc = match($doc['status']) { 'Approved'=>'#16a34a','Rejected'=>'#dc2626',default=>'#f59e0b' };
+            ?>
+            <div class="ai-doc-panel">
+              <!-- Doc header -->
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+                <div>
+                  <div style="font-weight:700;font-size:.9rem;color:#1a1a2e;">
+                    <i class="fa-solid fa-file-lines" style="color:#1a3a8c;margin-right:6px;"></i>
+                    <?= htmlspecialchars($dlabel) ?>
+                    <span style="font-size:.72rem;font-weight:400;color:#aaa;margin-left:6px;">#<?= $doc['id'] ?></span>
+                  </div>
+                  <div style="font-size:.75rem;color:#888;margin-top:3px;">
+                    Uploaded: <?= date('M d, Y g:i A', strtotime($doc['uploaded_at'])) ?>
+                    &nbsp;·&nbsp;
+                    <span style="font-weight:700;color:<?= $dsc ?>;"><?= $doc['status'] ?></span>
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                  <a href="../requirements/file.php?path=<?= urlencode($doc['file_path']) ?>"
+                     target="_blank" class="btn-view-file">
+                    <i class="fa-solid fa-eye"></i> View
+                  </a>
+                  <!-- Approve / Reject inline -->
+                  <?php if($doc['status']!=='Approved'): ?>
+                  <button type="button" class="btn-approve btn-doc-apv" data-doc-id="<?= $doc['id'] ?>" style="padding:6px 12px;font-size:.78rem;">
+                    <i class="fa-solid fa-circle-check"></i> Approve
+                  </button>
+                  <?php else: ?>
+                  <span style="font-size:.78rem;font-weight:700;color:#16a34a;"><i class="fa-solid fa-circle-check"></i> Approved</span>
+                  <?php endif; ?>
+                  <?php if($doc['status']!=='Rejected'): ?>
+                  <button type="button" class="btn-reject btn-doc-rej" data-doc-id="<?= $doc['id'] ?>" style="padding:6px 12px;font-size:.78rem;">
+                    <i class="fa-solid fa-circle-xmark"></i> Reject
+                  </button>
+                  <?php endif; ?>
+                  <!-- Re-inspect button -->
+                  <?php if ($doc['document_type']==='BirthCertificate'): ?>
+                  <form method="POST" action="ai_reinspect.php" style="display:inline;">
+                    <input type="hidden" name="doc_id"    value="<?= $doc['id'] ?>"/>
+                    <input type="hidden" name="file_path" value="<?= htmlspecialchars($doc['file_path']) ?>"/>
+                    <input type="hidden" name="doc_type"  value="<?= htmlspecialchars($doc['document_type']) ?>"/>
+                    <button type="submit" class="btn-primary" style="padding:6px 14px;font-size:.78rem;">
+                      <i class="fa-solid fa-robot"></i> Re-Inspect
+                    </button>
+                  </form>
+                  <?php else: ?>
+                  <span style="font-size:.73rem;color:#aaa;font-style:italic;">AI: Birth Cert only</span>
+                  <?php endif; ?>
+                </div>
+              </div>
+
+              <!-- AI result -->
+              <?php if ($ai): ?>
+              <div style="background:#f8fafc;border-radius:10px;padding:14px 16px;">
+                <!-- Verdict row -->
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+                  <?php if ($is_auth===true): ?>
+                  <span class="verdict-badge verdict-authentic"><i class="fa-solid fa-circle-check"></i> Authentic</span>
+                  <?php elseif ($is_auth===false): ?>
+                  <span class="verdict-badge verdict-fake"><i class="fa-solid fa-circle-xmark"></i> Fake / Altered</span>
+                  <?php else: ?>
+                  <span class="verdict-badge verdict-uncertain"><i class="fa-solid fa-circle-question"></i> Uncertain</span>
+                  <?php endif; ?>
+                  <div style="flex:1;min-width:120px;">
+                    <div style="font-size:.7rem;color:#aaa;margin-bottom:4px;">
+                      Confidence: <strong style="color:<?= $conf_color ?>"><?= $ai_conf ?>%</strong>
+                    </div>
+                    <div class="confidence-bar"><div class="confidence-fill" style="width:<?= $ai_conf ?>%;background:<?= $conf_color ?>;"></div></div>
+                  </div>
+                  <!-- Quality pills -->
+                  <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                    <?php if ($blur!==null):
+                      [$bc,$bl]=match($blur){'sharp'=>['#16a34a','Sharp'],'slightly_blurred'=>['#d97706','Slightly Blurred'],'too_blurred'=>['#dc2626','Too Blurred'],default=>['#6b7280','Unknown']}; ?>
+                    <span style="background:<?= $bc ?>18;color:<?= $bc ?>;padding:3px 9px;border-radius:20px;font-size:.7rem;font-weight:700;"><?= $bl ?></span>
+                    <?php endif; ?>
+                    <?php if ($align_ok!==null):[$ac,$al]=$align_ok?['#16a34a','Aligned']:['#d97706','Misaligned']; ?>
+                    <span style="background:<?= $ac ?>18;color:<?= $ac ?>;padding:3px 9px;border-radius:20px;font-size:.7rem;font-weight:700;"><?= $al ?></span>
+                    <?php endif; ?>
+                    <?php if ($legit!==null):[$lc,$ll]=match(true){$legit===true=>['#16a34a','Legitimate'],$legit===false=>['#dc2626','Not Legitimate'],default=>['#d97706','Uncertain']}; ?>
+                    <span style="background:<?= $lc ?>18;color:<?= $lc ?>;padding:3px 9px;border-radius:20px;font-size:.7rem;font-weight:700;"><?= $ll ?></span>
+                    <?php endif; ?>
+                  </div>
+                </div>
+                <?php if ($ai_notes_txt): ?>
+                <div style="font-size:.8rem;color:#555;line-height:1.55;background:#fff;
+                            border-radius:6px;padding:8px 12px;border-left:3px solid #2563eb;margin-bottom:8px;">
+                  <?= htmlspecialchars($ai_notes_txt) ?>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($ai_flags)): ?>
+                <div style="display:flex;flex-direction:column;gap:4px;">
+                  <?php foreach($ai_flags as $flag): ?>
+                  <div class="red-flag-item"><i class="fa-solid fa-xmark" style="flex-shrink:0;margin-top:1px;"></i><?= htmlspecialchars($flag) ?></div>
+                  <?php endforeach; ?>
+                </div>
+                <?php endif; ?>
+                <div style="font-size:.68rem;color:#ccc;margin-top:8px;">
+                  <?= htmlspecialchars($ai_model) ?>
+                  <?php if($ai_time): ?>&nbsp;·&nbsp;<?= date('M d, Y g:i A',strtotime($ai_time)) ?><?php endif; ?>
+                </div>
+              </div>
+              <?php else: ?>
+              <div style="background:#f8fafc;border-radius:8px;padding:12px 16px;
+                          font-size:.82rem;color:#aaa;font-style:italic;">
+                <?php if ($doc['document_type']==='BirthCertificate'): ?>
+                Not AI-inspected yet — click <strong>Re-Inspect</strong> above to run.
+                <?php else: ?>
+                AI inspection is only available for the PSA Birth Certificate.
+                <?php endif; ?>
+              </div>
+              <?php endif; ?>
+            </div><!-- end ai-doc-panel -->
+            <?php endforeach; endif; ?>
+          </div><!-- end ai-student-docs -->
+        </div><!-- end ai-student-row -->
+        <?php endforeach; ?>
+
+        <!-- Pagination -->
+        <?php if ($ai_pages > 1): ?>
+        <div class="crud-pagination">
+          <?php
+          $qs = http_build_query(['tab'=>'inspection','ai_q'=>$ai_search,'ai_status'=>$ai_status,'ai_course'=>$ai_course]);
+          if ($ai_page > 1) echo "<a href='?$qs&ai_page=".($ai_page-1)."' class='pg-btn pg-label'>&laquo;</a>";
+          for ($p=max(1,$ai_page-2); $p<=min($ai_pages,$ai_page+2); $p++)
+              echo "<a href='?$qs&ai_page=$p' class='pg-btn".($p===$ai_page?' active':'')."'>$p</a>";
+          if ($ai_page < $ai_pages) echo "<a href='?$qs&ai_page=".($ai_page+1)."' class='pg-btn pg-label'>&raquo;</a>";
+          ?>
+        </div>
+        <?php endif; ?>
+      </div>
+    </div><!-- end tab-inspection -->
+
   </div><!-- end content -->
   <div class="footer">eLearning Commons &copy; 2026</div>
 </div>
@@ -598,6 +605,32 @@ $ACTIVE_NAV = 'documents';
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
 <script src="../js/dashboard.js"></script>
 <script>
+// ── Tab switching (also updates URL without page reload) ──────
+function switchTab(name) {
+    document.querySelectorAll('.tab-pane').forEach(function(p){ p.classList.remove('active'); });
+    document.querySelectorAll('.page-tab').forEach(function(b){ b.classList.remove('active'); });
+    document.getElementById('tab-' + name).classList.add('active');
+    document.querySelectorAll('.page-tab').forEach(function(b){
+        if (b.getAttribute('onclick') === "switchTab('" + name + "')") b.classList.add('active');
+    });
+    var url = new URL(window.location.href);
+    url.searchParams.set('tab', name);
+    history.replaceState(null, '', url.toString());
+}
+
+// ── Expand/collapse AI student row ───────────────────────────
+function toggleAiStudent(pid) {
+    var docs  = document.getElementById('aidocs-' + pid);
+    var chev  = document.getElementById('chev-' + pid);
+    var row   = document.getElementById('airow-' + pid);
+    if (!docs) return;
+    var open = docs.style.display === 'none' || docs.style.display === '';
+    docs.style.display = open ? 'block' : 'none';
+    if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
+    if (row)  row.style.borderColor = open ? '#93c5fd' : '';
+}
+
+// ── Document approve/reject ───────────────────────────────────
 document.querySelectorAll('.btn-doc-apv').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
         e.preventDefault();
@@ -605,10 +638,9 @@ document.querySelectorAll('.btn-doc-apv').forEach(function(btn) {
         showConfirm('Approve this document?', function() {
             var form = document.createElement('form');
             form.method = 'POST';
-            form.innerHTML = '<input type="hidden" name="doc_id" value="' + docId + '"/>' +
+            form.innerHTML = '<input type="hidden" name="doc_id" value="'+docId+'"/>'+
                              '<input type="hidden" name="new_status" value="Approved"/>';
-            document.body.appendChild(form);
-            form.submit();
+            document.body.appendChild(form); form.submit();
         });
     });
 });
@@ -619,62 +651,45 @@ document.querySelectorAll('.btn-doc-rej').forEach(function(btn) {
         showConfirm('Reject this document?', function() {
             var form = document.createElement('form');
             form.method = 'POST';
-            form.innerHTML = '<input type="hidden" name="doc_id" value="' + docId + '"/>' +
+            form.innerHTML = '<input type="hidden" name="doc_id" value="'+docId+'"/>'+
                              '<input type="hidden" name="new_status" value="Rejected"/>';
-            document.body.appendChild(form);
-            form.submit();
+            document.body.appendChild(form); form.submit();
         });
     });
 });
 
 // ── Generate Document ─────────────────────────────────────────
-// Uses a hidden form targeting a hidden iframe so the page does not
-// navigate away — the browser receives the .docx as a download.
-(function () {
-    // Create a hidden iframe that will receive the .docx stream
-    var iframe = document.createElement('iframe');
-    iframe.name  = 'docx_download_frame';
-    iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;';
-    document.body.appendChild(iframe);
-
-    // Create the hidden POST form
-    var dlForm = document.createElement('form');
-    dlForm.method = 'POST';
-    dlForm.action = '../shared/generate_docx.php';
-    dlForm.target = 'docx_download_frame';
-    dlForm.innerHTML = '<input type="hidden" name="pre_reg_id" id="dlPreRegId" value=""/>';
-    document.body.appendChild(dlForm);
-
-    document.querySelectorAll('.btn-generate-doc').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            if (btn.disabled) return;
-            var pid  = btn.dataset.preRegId;
-            var name = btn.dataset.name;
-            showConfirm(
-                'Generate the admission Word document for ' + name + '?\n\n' +
-                'The file will download automatically.',
-                function () {
-                    // Show a brief loading state
-                    var orig = btn.innerHTML;
-                    btn.disabled = true;
-                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generating…';
-
-                    document.getElementById('dlPreRegId').value = pid;
-                    dlForm.submit();
-
-                    // Restore button after a reasonable delay
-                    // (we can't detect iframe download completion directly)
-                    setTimeout(function () {
-                        btn.disabled = false;
-                        btn.innerHTML = orig;
-                    }, 4000);
-                },
-                'Generate Document'
-            );
-        });
+document.querySelectorAll('.btn-generate-doc').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        if (btn.disabled) return;
+        var pid  = btn.dataset.preRegId;
+        var name = btn.dataset.name;
+        showConfirm('Generate the admission document for ' + name + '?', function() {
+            var orig = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+            var fd = new FormData(); fd.set('pre_reg_id', pid);
+            fetch('../shared/generate_docx.php', { method:'POST', body:fd })
+                .then(function(r) {
+                    var ct = r.headers.get('content-type') || '';
+                    if (ct.indexOf('json') !== -1) return r.json().then(function(j){ throw new Error(j.error||'Failed'); });
+                    return r.blob();
+                })
+                .then(function(blob) {
+                    var url = URL.createObjectURL(blob);
+                    var a   = document.createElement('a');
+                    a.href  = url; a.download = 'admission_'+name.replace(/\s+/g,'_')+'_'+pid+'.docx';
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    btn.disabled = false; btn.innerHTML = orig;
+                })
+                .catch(function(err) {
+                    showAlertModal(err.message||'Generation failed.','error','Document Error');
+                    btn.disabled = false; btn.innerHTML = orig;
+                });
+        }, 'Generate Document');
     });
-}());
+});
 </script>
 </body>
 </html>
-<?php $conn->close(); ?>

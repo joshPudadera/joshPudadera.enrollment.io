@@ -169,10 +169,30 @@
                     if (data.success) {
                         if (data.login_url) {
                             /* Show login-link modal */
-                            var urlEl  = document.getElementById('loginLinkUrl');
-                            var userEl = document.getElementById('loginLinkUsername');
+                            var urlEl    = document.getElementById('loginLinkUrl');
+                            var userEl   = document.getElementById('loginLinkUsername');
+                            var bannerEl = document.getElementById('emailStatusBanner');
                             if (urlEl)  { urlEl.href = data.login_url; urlEl.textContent = data.login_url; }
                             if (userEl) { userEl.textContent = data.username || ''; }
+
+                            /* Email delivery banner */
+                            if (bannerEl) {
+                                if (data.email_sent) {
+                                    bannerEl.style.cssText = 'margin-bottom:14px;border-radius:8px;padding:10px 14px;font-size:.82rem;background:#f0fdf4;border:1px solid #86efac;color:#166534;';
+                                    bannerEl.innerHTML = '<i class="fa-solid fa-envelope-circle-check"></i> '
+                                        + 'Login link emailed to <strong>' + escapeHtml(data.email_to || '') + '</strong>';
+                                    bannerEl.style.display = '';
+                                } else {
+                                    bannerEl.style.cssText = 'margin-bottom:14px;border-radius:8px;padding:10px 14px;font-size:.82rem;background:#fff7ed;border:1px solid #fcd34d;color:#92400e;';
+                                    bannerEl.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> '
+                                        + 'Email could not be sent — share the link below manually.'
+                                        + (data.email_error
+                                            ? '<div style="margin-top:5px;font-size:.72rem;opacity:.8;">' + escapeHtml(data.email_error) + '</div>'
+                                            : '');
+                                    bannerEl.style.display = '';
+                                }
+                            }
+
                             openModal('loginLinkModal');
                         } else {
                             location.reload();

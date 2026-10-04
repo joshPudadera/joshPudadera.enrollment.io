@@ -9,12 +9,35 @@ $uid          = (int)$_SESSION['user_id'];
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'U', 0, 1));
 
 // Fetch all applications for this user
+// Primary: by user_id. Fallback: by email (pre-reg submitted before account existed).
 $apps = [];
 $r = $conn->prepare("SELECT * FROM pre_registrations WHERE user_id=? ORDER BY submitted_at DESC");
 $r->bind_param('i',$uid); $r->execute();
 $apps_result = $r->get_result();
 while ($row = $apps_result->fetch_assoc()) $apps[] = $row;
 $r->close();
+
+// If no apps found by user_id, try email fallback
+if (empty($apps)) {
+    $er = $conn->query("SELECT email FROM users WHERE id=$uid LIMIT 1");
+    if ($er && $erow = $er->fetch_assoc()) {
+        $esc_email = $conn->real_escape_string($erow['email']);
+        $r2 = $conn->prepare(
+            "SELECT * FROM pre_registrations
+             WHERE email=? AND (user_id IS NULL OR user_id=0)
+             ORDER BY submitted_at DESC"
+        );
+        $r2->bind_param('s', $esc_email); $r2->execute();
+        $res2 = $r2->get_result();
+        while ($row2 = $res2->fetch_assoc()) {
+            // Link permanently
+            $conn->query("UPDATE pre_registrations SET user_id=$uid WHERE id=" . (int)$row2['id']);
+            $row2['user_id'] = $uid;
+            $apps[] = $row2;
+        }
+        $r2->close();
+    }
+}
 
 // Fetch enrollment records (ID number, section, year level) for each application
 $enrollments_map = [];
@@ -30,24 +53,26 @@ if (!empty($apps)) {
     }
 }
 
-// Fetch all uploaded documents for this user — one query, no duplicates
-// Union: docs linked via pre_reg_id + any docs linked only via user_id
+// Fetch all uploaded documents — keyed by pre_reg_id for fast per-app lookup
 $docs = [];
-$res = $conn->query(
-    "SELECT d.*, COALESCE(p.course,'') AS course
-     FROM enrollment_documents d
-     LEFT JOIN pre_registrations p ON d.pre_reg_id = p.id
-     WHERE d.user_id = $uid
-     ORDER BY d.uploaded_at DESC"
-);
-if ($res) while ($row = $res->fetch_assoc()) $docs[(int)$row['id']] = $row;
-$docs = array_values($docs); // re-index
+if (!empty($apps)) {
+    $app_ids_str = implode(',', array_map('intval', array_column($apps, 'id')));
+    $res = $conn->query(
+        "SELECT d.*, COALESCE(p.course,'') AS course
+         FROM enrollment_documents d
+         LEFT JOIN pre_registrations p ON d.pre_reg_id = p.id
+         WHERE d.pre_reg_id IN ($app_ids_str)
+         ORDER BY d.uploaded_at ASC"
+    );
+    if ($res) while ($row = $res->fetch_assoc()) $docs[(int)$row['id']] = $row;
+}
+$docs = array_values($docs);
 
 $status_steps = ['Pending'=>1,'Approved'=>2,'Enrolled'=>3];
 $doc_type_labels = [
     'Form137'=>'Form 137','BirthCertificate'=>'PSA Birth Certificate',
     'GoodMoral'=>'Good Moral','MedicalCert'=>'Medical Certificate',
-    'IDPhoto'=>'ID Photo','Other'=>'Other',
+    'IDPhoto'=>'ID Photo','ReportCard'=>'Report Card (Form 138)','Other'=>'Other',
 ];
 ?>
 <!DOCTYPE html>
@@ -233,80 +258,179 @@ $doc_type_labels = [
 
       <!-- Documents section -->
       <div style="border-top:1px solid #f0f2f5;padding-top:16px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
           <h3 style="font-size:.9rem;font-weight:700;color:#1a1a2e;">
             <i class="fa-solid fa-folder-open" style="color:#2563eb;margin-right:6px;"></i>
-            Uploaded Documents (<?= count($app_docs) ?>)
+            Documents
           </h3>
           <a href="requirements.php" class="btn-add" style="padding:6px 14px;font-size:.78rem;">
-            <i class="fa-solid fa-plus"></i> Add More
+            <i class="fa-solid fa-plus"></i> Upload / Manage
           </a>
         </div>
 
-        <?php if (!empty($app_docs)): ?>
-        <table class="crud-table">
-          <thead>
-            <tr>
-              <th>Document Type</th>
-              <th>File Name</th>
-              <th>Status</th>
-              <th>AI Result</th>
-              <th>View</th>
-            </tr>
-          </thead>
-          <tbody>
-            <?php foreach ($app_docs as $doc):
-              $ai      = !empty($doc['ai_result']) ? json_decode($doc['ai_result'],true) : null;
-              $verdict = $ai['is_authentic'] ?? null;
-              if ($verdict===true)          { $avc='#16a34a'; $avi='fa-circle-check';    $avl='Authentic'; }
-              elseif ($verdict===false)     { $avc='#dc2626'; $avi='fa-circle-xmark';    $avl='Fake/Altered'; }
-              elseif ($verdict==='uncertain'){ $avc='#f59e0b'; $avi='fa-circle-question'; $avl='Uncertain'; }
-              else                          { $avc='#aaa';    $avi='fa-robot';           $avl='Not inspected'; }
-              $doc_status_badge = $doc['status']==='Approved'?'badge-active':($doc['status']==='Rejected'?'badge-inactive':'');
-              $doc_status_style = $doc['status']==='Pending' ? 'background:#fff7ed;color:#d97706;padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:600;' : '';
-            ?>
-            <tr>
-              <td style="font-weight:600;">
-                <?= htmlspecialchars($doc_type_labels[$doc['document_type']] ?? $doc['document_type']) ?>
-              </td>
-              <td style="font-size:.75rem;color:#555;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                <?= htmlspecialchars($doc['file_name']) ?>
-              </td>
-              <td>
-                <?php if ($doc_status_style): ?>
-                <span style="<?= $doc_status_style ?>"><?= $doc['status'] ?></span>
-                <?php else: ?>
-                <span class="<?= $doc_status_badge ?>"><?= $doc['status'] ?></span>
-                <?php endif; ?>
-              </td>
-              <td>
-                <span style="font-size:.75rem;color:<?= $avc ?>;font-weight:600;">
-                  <i class="fa-solid <?= $avi ?>"></i> <?= $avl ?>
-                  <?php if ($ai && $ai['confidence']): ?>
-                  <span style="color:#aaa;font-weight:400;">(<?= $ai['confidence'] ?>%)</span>
-                  <?php endif; ?>
-                </span>
-              </td>
-              <td>
-                <a href="../requirements/file.php?path=<?= urlencode($doc['file_path']) ?>"
-                   target="_blank"
-                   class="btn-view-file">
-                  <i class="fa-solid fa-eye"></i> View
-                </a>
-              </td>
-            </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
+        <?php
+        $app_docs_list = array_values($app_docs);
+        $total_docs    = count($app_docs_list);
+        $n_approved    = count(array_filter($app_docs_list, fn($d)=>$d['status']==='Approved'));
+        $n_pending     = count(array_filter($app_docs_list, fn($d)=>$d['status']==='Pending'));
+        $n_rejected    = count(array_filter($app_docs_list, fn($d)=>$d['status']==='Rejected'));
+
+        // Required docs
+        $req_types = ['BirthCertificate'=>'Birth Cert','ReportCard'=>'Report Card','GoodMoral'=>'Good Moral'];
+        ?>
+
+        <?php if ($total_docs > 0): ?>
+
+        <!-- Quick summary stat row -->
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+          <div style="flex:1;min-width:80px;background:#f8fafc;border:1.5px solid #e5e7eb;border-radius:10px;padding:10px 14px;text-align:center;">
+            <div style="font-size:1.4rem;font-weight:700;color:#1a1a2e;"><?= $total_docs ?></div>
+            <div style="font-size:.68rem;color:#888;margin-top:2px;text-transform:uppercase;letter-spacing:.04em;">Total</div>
+          </div>
+          <div style="flex:1;min-width:80px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:10px;padding:10px 14px;text-align:center;">
+            <div style="font-size:1.4rem;font-weight:700;color:#16a34a;"><?= $n_approved ?></div>
+            <div style="font-size:.68rem;color:#16a34a;margin-top:2px;text-transform:uppercase;letter-spacing:.04em;">Approved</div>
+          </div>
+          <div style="flex:1;min-width:80px;background:#fffbeb;border:1.5px solid #fde68a;border-radius:10px;padding:10px 14px;text-align:center;">
+            <div style="font-size:1.4rem;font-weight:700;color:#d97706;"><?= $n_pending ?></div>
+            <div style="font-size:.68rem;color:#d97706;margin-top:2px;text-transform:uppercase;letter-spacing:.04em;">Pending</div>
+          </div>
+          <?php if ($n_rejected > 0): ?>
+          <div style="flex:1;min-width:80px;background:#fff1f2;border:1.5px solid #fca5a5;border-radius:10px;padding:10px 14px;text-align:center;">
+            <div style="font-size:1.4rem;font-weight:700;color:#dc2626;"><?= $n_rejected ?></div>
+            <div style="font-size:.68rem;color:#dc2626;margin-top:2px;text-transform:uppercase;letter-spacing:.04em;">Rejected</div>
+          </div>
+          <?php endif; ?>
+        </div>
+
+        <!-- Required docs checklist -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+          <?php foreach ($req_types as $rtype => $rlabel):
+            $rtype_docs  = array_values(array_filter($app_docs_list, fn($d) => $d['document_type'] === $rtype));
+            $r_approved  = (bool)array_filter($rtype_docs, fn($d) => $d['status'] === 'Approved');
+            $r_rejected  = !$r_approved && !empty($rtype_docs) && $rtype_docs[count($rtype_docs)-1]['status']==='Rejected';
+            $r_pending   = !$r_approved && !$r_rejected && !empty($rtype_docs);
+            [$rclr,$rbg,$rico] = $r_approved
+              ? ['#16a34a','#dcfce7','fa-circle-check']
+              : ($r_rejected
+                ? ['#dc2626','#fee2e2','fa-circle-xmark']
+                : ($r_pending
+                  ? ['#d97706','#fff7ed','fa-clock']
+                  : ['#9ca3af','#f3f4f6','fa-circle-xmark']));
+            $rlbl_status = $r_approved?'Approved':($r_rejected?'Rejected':($r_pending?'Pending':'Missing'));
+            $rattempts   = count($rtype_docs);
+          ?>
+          <div style="background:<?= $rbg ?>;border:1.5px solid <?= $rclr ?>30;border-radius:8px;
+                      padding:8px 12px;min-width:100px;">
+            <div style="font-size:.68rem;font-weight:700;color:<?= $rclr ?>;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">
+              <i class="fa-solid <?= $rico ?>"></i> <?= htmlspecialchars($rlabel) ?>
+            </div>
+            <div style="font-size:.8rem;font-weight:700;color:<?= $rclr ?>;"><?= $rlbl_status ?></div>
+            <?php if ($rattempts > 0): ?>
+            <div style="font-size:.65rem;color:<?= $rclr ?>;opacity:.7;margin-top:2px;"><?= $rattempts ?> submission<?= $rattempts!==1?'s':'' ?></div>
+            <?php endif; ?>
+          </div>
+          <?php endforeach; ?>
+        </div>
+
+        <!-- Grouped document cards by type -->
+        <?php
+        $grouped_docs = [];
+        foreach ($app_docs_list as $d) $grouped_docs[$d['document_type']][] = $d;
+        $all_labels = array_merge(
+            ['BirthCertificate'=>'PSA Birth Certificate','ReportCard'=>'Report Card (Form 138)','GoodMoral'=>'Certificate of Good Moral'],
+            $doc_type_labels
+        );
+        ?>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+        <?php foreach ($grouped_docs as $gtype => $gdocs):
+          $glabel      = $all_labels[$gtype] ?? $gtype;
+          $g_approved  = (bool)array_filter($gdocs, fn($d)=>$d['status']==='Approved');
+          $g_latest_st = $gdocs[count($gdocs)-1]['status'];
+          [$ghbg,$ghclr,$ghico] = $g_approved
+              ? ['#f0fdf4','#16a34a','fa-circle-check']
+              : ($g_latest_st==='Rejected'
+                  ? ['#fff1f2','#dc2626','fa-circle-xmark']
+                  : ['#fffbeb','#d97706','fa-clock']);
+        ?>
+        <div style="border:1.5px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+          <!-- Type header -->
+          <div style="background:<?= $ghbg ?>;padding:9px 14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+            <span style="font-weight:700;font-size:.85rem;color:<?= $ghclr ?>;">
+              <i class="fa-solid <?= $ghico ?>"></i> <?= htmlspecialchars($glabel) ?>
+            </span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <?php if ($g_approved): ?>
+              <span style="background:#dcfce7;color:#16a34a;padding:2px 9px;border-radius:20px;font-size:.7rem;font-weight:700;">✓ Approved</span>
+              <?php elseif ($g_latest_st==='Rejected'): ?>
+              <span style="background:#fee2e2;color:#dc2626;padding:2px 9px;border-radius:20px;font-size:.7rem;font-weight:700;">✗ Rejected</span>
+              <?php else: ?>
+              <span style="background:#fff7ed;color:#d97706;padding:2px 9px;border-radius:20px;font-size:.7rem;font-weight:700;">⏳ Pending</span>
+              <?php endif; ?>
+              <span style="font-size:.7rem;color:#888;"><?= count($gdocs) ?> submission<?= count($gdocs)!==1?'s':'' ?></span>
+            </div>
+          </div>
+          <!-- Submissions grid -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;padding:12px;">
+          <?php foreach ($gdocs as $sidx => $gdoc):
+            $g_thumb   = '../requirements/file.php?path=' . urlencode($gdoc['file_path']);
+            $g_ext     = strtolower(pathinfo($gdoc['file_name'], PATHINFO_EXTENSION));
+            $g_is_img  = in_array($g_ext,['jpg','jpeg','png']);
+            $gst       = $gdoc['status'];
+            [$gsc,$gsi] = match($gst){
+                'Approved'=>['#16a34a','fa-circle-check'],
+                'Rejected'=>['#dc2626','fa-circle-xmark'],
+                default   =>['#d97706','fa-clock'],
+            };
+            $gai       = !empty($gdoc['ai_result']) ? json_decode($gdoc['ai_result'],true) : null;
+            $gconf     = $gai ? (int)($gai['confidence']??0) : 0;
+          ?>
+          <div style="border:1.5px solid #e8edf4;border-radius:8px;overflow:hidden;">
+            <div style="background:#f8fafc;padding:4px 10px;font-size:.68rem;font-weight:700;
+                        display:flex;justify-content:space-between;align-items:center;">
+              <span style="color:#888;">Sub. #<?= $sidx+1 ?></span>
+              <span style="color:<?= $gsc ?>;"><i class="fa-solid <?= $gsi ?>"></i> <?= $gst ?></span>
+            </div>
+            <?php if ($g_is_img): ?>
+            <a href="<?= $g_thumb ?>" target="_blank">
+              <img src="<?= $g_thumb ?>" alt="doc"
+                   style="width:100%;height:70px;object-fit:cover;display:block;"
+                   onerror="this.style.display='none'"/>
+            </a>
+            <?php else: ?>
+            <div style="height:50px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;">
+              <i class="fa-solid fa-file" style="color:#aaa;font-size:1.2rem;"></i>
+            </div>
+            <?php endif; ?>
+            <div style="padding:6px 10px;">
+              <div style="font-size:.68rem;color:#aaa;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                <?= htmlspecialchars($gdoc['file_name']) ?>
+              </div>
+              <?php if ($gai): ?>
+              <div style="font-size:.65rem;color:#888;">AI: <?= $gconf ?>% confidence</div>
+              <?php endif; ?>
+              <a href="<?= $g_thumb ?>" target="_blank"
+                 style="font-size:.7rem;color:#2563eb;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:3px;margin-top:5px;">
+                <i class="fa-solid fa-eye"></i> View
+              </a>
+            </div>
+          </div>
+          <?php endforeach; ?>
+          </div>
+        </div>
+        <?php endforeach; ?>
+        </div>
+
         <?php else: ?>
-        <div style="text-align:center;padding:20px;color:#aaa;font-size:.82rem;">
-          <i class="fa-solid fa-folder-open" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>
+        <div style="text-align:center;padding:24px;color:#aaa;font-size:.82rem;background:#f8fafc;border-radius:10px;">
+          <i class="fa-solid fa-folder-open" style="font-size:1.8rem;display:block;margin-bottom:10px;opacity:.4;"></i>
           No documents uploaded yet.
-          <a href="../requirements/index.php" style="color:#2563eb;display:block;margin-top:8px;">
+          <a href="requirements.php" style="color:#2563eb;display:block;margin-top:8px;font-weight:600;">
             Upload Requirements →
           </a>
         </div>
         <?php endif; ?>
+
       </div><!-- end documents section -->
 
     </div><!-- end app card -->

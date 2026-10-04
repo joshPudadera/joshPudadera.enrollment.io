@@ -2,7 +2,7 @@
 session_start();
 require_once __DIR__ . '/../shared/db.php';
 if (empty($_SESSION['user_id']))   { header('Location: ../auth/signin.php'); exit; }
-if ($_SESSION['role'] !== 'admin') { header('Location: ../admin_dashboard/dashboard.php'); exit; }
+if (!is_admin_or_staff()) { header('Location: ../auth/signin.php'); exit; }
 
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'A', 0, 1));
 
@@ -21,6 +21,19 @@ if ($filter) {
     $where .= " AND p.status = '" . $conn->real_escape_string($filter) . "'";
 }
 
+$rows_per_page = 10;
+$page          = max(1, (int)($_GET['page'] ?? 1));
+
+$total_count = (int)$conn->query(
+    "SELECT COUNT(DISTINCT p.id) c
+     FROM pre_registrations p
+     LEFT JOIN enrollment_documents d ON d.pre_reg_id = p.id
+     $where"
+)->fetch_assoc()['c'];
+
+$total_pages = max(1, (int)ceil($total_count / $rows_per_page));
+$page = min($page, $total_pages);
+
 $applicants = [];
 $res = $conn->query(
     "SELECT p.*,
@@ -30,7 +43,8 @@ $res = $conn->query(
      LEFT JOIN enrollment_documents d ON d.pre_reg_id = p.id
      $where
      GROUP BY p.id
-     ORDER BY p.submitted_at DESC"
+     ORDER BY p.submitted_at DESC
+     LIMIT $rows_per_page OFFSET " . (($page - 1) * $rows_per_page)
 );
 if ($res) while ($r = $res->fetch_assoc()) $applicants[] = $r;
 
@@ -115,7 +129,7 @@ require_once __DIR__ . '/../admin_dashboard/sidebar.php';
       </a>
       <?php endif; ?>
       <span style="font-size:.78rem;color:#aaa;white-space:nowrap;">
-        <?= count($applicants) ?> result<?= count($applicants)!==1?'s':'' ?>
+        <?= $total_count ?> result<?= $total_count!==1?'s':'' ?>
       </span>
     </form>
 
@@ -195,6 +209,17 @@ require_once __DIR__ . '/../admin_dashboard/sidebar.php';
           <?php endforeach; ?>
         </tbody>
       </table>
+      <?php if ($total_pages > 1): ?>
+      <div class="crud-pagination">
+        <?php
+        $qs = http_build_query(['q'=>$search,'status'=>$filter]);
+        if ($page > 1) echo "<a href='?$qs&page=".($page-1)."' class='pg-btn pg-label'>&laquo;</a>";
+        for ($p = max(1,$page-2); $p <= min($total_pages,$page+2); $p++)
+            echo "<a href='?$qs&page=$p' class='pg-btn".($p===$page?' active':'')."'>$p</a>";
+        if ($page < $total_pages) echo "<a href='?$qs&page=".($page+1)."' class='pg-btn pg-label'>&raquo;</a>";
+        ?>
+      </div>
+      <?php endif; ?>
     </div>
   </div>
   <div class="footer">eLearning Commons &copy; 2026</div>

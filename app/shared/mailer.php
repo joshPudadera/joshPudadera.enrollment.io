@@ -1,33 +1,197 @@
 <?php
 // ============================================================
 //  MAILER.PHP  (shared/)
-//  Sends emails using PHP mail() with SMTP via php.ini settings.
+//  Sends HTML emails over SMTP using PHP's native socket
+//  functions — no Composer or PHPMailer required.
 //
-//  For XAMPP local testing, configure C:\xampp\php\php.ini:
-//    [mail function]
-//    SMTP = smtp.gmail.com
-//    smtp_port = 587
-//    sendmail_from = your@gmail.com
+//  Configuration (set in app/.env):
+//    MAIL_HOST      SMTP server hostname   e.g. smtp.gmail.com
+//    MAIL_PORT      587 (STARTTLS) or 465 (SSL)
+//    MAIL_USER      SMTP login / sender address
+//    MAIL_PASS      SMTP password or App Password
+//    MAIL_FROM_NAME Display name           e.g. BCP Student Portal
+//    MAIL_ENCRYPT   tls  (STARTTLS, default) | ssl | none
 //
-//  Or use a free SMTP relay like Brevo (formerly Sendinblue),
-//  Mailgun, or Mailtrap for testing.
+//  Gmail quick-start:
+//    1. Enable 2-Factor Auth on the Google account.
+//    2. Generate an App Password (Google → Security → App Passwords).
+//    3. Set MAIL_HOST=smtp.gmail.com  MAIL_PORT=587
+//       MAIL_USER=you@gmail.com  MAIL_PASS=<app-password>
+//       MAIL_ENCRYPT=tls
 //
-//  USAGE:
-//    require_once __DIR__ . '/mailer.php';
-//    send_email('student@email.com', 'Subject', '<h1>HTML body</h1>');
+//  PUBLIC FUNCTIONS:
+//    send_email(string $to, string $subject, string $html): bool
+//    email_template(string $title, string $body_html,
+//                   string $cta_url = '', string $cta_text = ''): string
 // ============================================================
 
-function send_email(string $to, string $subject, string $html_body): bool {
-    $from_name  = 'BCP Student Portal';
-    $from_email = 'noreply@bcp.edu.ph';
+// ── Load SMTP config from .env ────────────────────────────────
+function _mailer_config(): array {
+    static $cfg = null;
+    if ($cfg !== null) return $cfg;
 
-    $headers  = "MIME-Version: 1.0\r\n";
-    $headers .= "Content-Type: text/html; charset=UTF-8\r\n";
-    $headers .= "From: {$from_name} <{$from_email}>\r\n";
-    $headers .= "Reply-To: {$from_email}\r\n";
-    $headers .= "X-Mailer: PHP/" . PHP_VERSION;
+    $env = [];
+    $env_file = __DIR__ . '/../.env';
+    if (is_readable($env_file)) {
+        foreach (file($env_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === '#') continue;
+            if (str_contains($line, '=')) {
+                [$k, $v] = explode('=', $line, 2);
+                $env[trim($k)] = trim($v);
+            }
+        }
+    }
 
-    return @mail($to, $subject, $html_body, $headers);
+    // Fall back to environment variables (Docker / hosting)
+    foreach (['MAIL_HOST','MAIL_PORT','MAIL_USER','MAIL_PASS','MAIL_FROM_NAME','MAIL_ENCRYPT'] as $key) {
+        if (!isset($env[$key]) && getenv($key) !== false) {
+            $env[$key] = getenv($key);
+        }
+    }
+
+    $cfg = [
+        'host'      => $env['MAIL_HOST']      ?? '',
+        'port'      => (int)($env['MAIL_PORT'] ?? 587),
+        'user'      => $env['MAIL_USER']       ?? '',
+        'pass'      => $env['MAIL_PASS']       ?? '',
+        'from_name' => $env['MAIL_FROM_NAME']  ?? 'BCP Student Portal',
+        'encrypt'   => strtolower($env['MAIL_ENCRYPT'] ?? 'tls'),
+    ];
+    return $cfg;
+}
+
+// ── Low-level SMTP send ───────────────────────────────────────
+/**
+ * Send an HTML email via SMTP (STARTTLS or SSL).
+ *
+ * @param  string $to      Recipient email address
+ * @param  string $subject Email subject line
+ * @param  string $html    Full HTML body
+ * @return bool            true on success
+ * @throws RuntimeException on SMTP failure
+ */
+function send_email(string $to, string $subject, string $html): bool {
+    $c = _mailer_config();
+
+    if (empty($c['host']) || empty($c['user']) || empty($c['pass'])) {
+        throw new RuntimeException(
+            'SMTP not configured. Add MAIL_HOST, MAIL_USER, MAIL_PASS to your .env file.'
+        );
+    }
+
+    $host    = $c['host'];
+    $port    = $c['port'];
+    $encrypt = $c['encrypt'];   // 'tls', 'ssl', or 'none'
+    $user    = $c['user'];
+    $pass    = $c['pass'];
+    $from    = $c['user'];      // sender address == SMTP login
+    $name    = $c['from_name'];
+    $timeout = 15;
+
+    // ── 1. Open socket ────────────────────────────────────────
+    $socket_host = ($encrypt === 'ssl') ? "ssl://$host" : $host;
+    $errno = $errstr = null;
+    $sock = @fsockopen($socket_host, $port, $errno, $errstr, $timeout);
+    if (!$sock) {
+        throw new RuntimeException("SMTP connection failed to $host:$port — $errstr ($errno)");
+    }
+    stream_set_timeout($sock, $timeout);
+
+    // Helper: read one response line (or multi-line block)
+    $read = function () use ($sock): string {
+        $out = '';
+        while (!feof($sock)) {
+            $line = fgets($sock, 512);
+            if ($line === false) break;
+            $out .= $line;
+            // Multi-line responses have a '-' as the 4th char; last line has a space
+            if (isset($line[3]) && $line[3] === ' ') break;
+        }
+        return $out;
+    };
+
+    // Helper: send a command and read response
+    $cmd = function (string $command) use ($sock, $read): string {
+        fwrite($sock, $command . "\r\n");
+        return $read();
+    };
+
+    // Helper: assert response code
+    $expect = function (string $resp, string $code, string $context) {
+        if (!str_starts_with(trim($resp), $code)) {
+            throw new RuntimeException("SMTP $context failed: $resp");
+        }
+    };
+
+    // ── 2. Greeting ───────────────────────────────────────────
+    $expect($read(), '220', 'greeting');
+
+    // ── 3. EHLO ───────────────────────────────────────────────
+    $ehlo_resp = $cmd("EHLO " . ($host ?: 'localhost'));
+    $expect($ehlo_resp, '250', 'EHLO');
+
+    // ── 4. STARTTLS upgrade (port 587) ───────────────────────
+    if ($encrypt === 'tls') {
+        $expect($cmd('STARTTLS'), '220', 'STARTTLS');
+        if (!stream_socket_enable_crypto($sock, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+            throw new RuntimeException('STARTTLS crypto negotiation failed.');
+        }
+        // Re-send EHLO after upgrade
+        $ehlo_resp = $cmd("EHLO " . ($host ?: 'localhost'));
+        $expect($ehlo_resp, '250', 'EHLO after STARTTLS');
+    }
+
+    // ── 5. AUTH LOGIN ─────────────────────────────────────────
+    $expect($cmd('AUTH LOGIN'), '334', 'AUTH LOGIN');
+    $expect($cmd(base64_encode($user)), '334', 'AUTH username');
+    $expect($cmd(base64_encode($pass)), '235', 'AUTH password');
+
+    // ── 6. Envelope ───────────────────────────────────────────
+    $expect($cmd("MAIL FROM:<$from>"), '250', 'MAIL FROM');
+    $expect($cmd("RCPT TO:<$to>"),     '250', 'RCPT TO');
+    $expect($cmd('DATA'),              '354', 'DATA');
+
+    // ── 7. Build RFC 2822 message ─────────────────────────────
+    $boundary = '==BCP_' . bin2hex(random_bytes(8));
+    $date     = date('r');
+    $msg_id   = '<' . uniqid('bcp', true) . '@' . $host . '>';
+    $enc_subj = '=?UTF-8?B?' . base64_encode($subject) . '?=';
+    $enc_name = '=?UTF-8?B?' . base64_encode($name)    . '?=';
+
+    // Plain-text fallback (strip tags)
+    $plain = wordwrap(strip_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $html)), 76, "\n", true);
+
+    $headers =
+        "Date: $date\r\n" .
+        "From: $enc_name <$from>\r\n" .
+        "To: <$to>\r\n" .
+        "Subject: $enc_subj\r\n" .
+        "Message-ID: $msg_id\r\n" .
+        "MIME-Version: 1.0\r\n" .
+        "Content-Type: multipart/alternative; boundary=\"$boundary\"\r\n" .
+        "X-Mailer: BCP-SMS-Mailer/1.0\r\n";
+
+    $body =
+        "--$boundary\r\n" .
+        "Content-Type: text/plain; charset=UTF-8\r\n" .
+        "Content-Transfer-Encoding: base64\r\n\r\n" .
+        chunk_split(base64_encode($plain)) . "\r\n" .
+        "--$boundary\r\n" .
+        "Content-Type: text/html; charset=UTF-8\r\n" .
+        "Content-Transfer-Encoding: base64\r\n\r\n" .
+        chunk_split(base64_encode($html)) . "\r\n" .
+        "--$boundary--\r\n";
+
+    fwrite($sock, $headers . "\r\n" . $body . "\r\n.\r\n");
+    $data_resp = $read();
+    $expect($data_resp, '250', 'message accepted');
+
+    // ── 8. Quit ───────────────────────────────────────────────
+    $cmd('QUIT');
+    fclose($sock);
+
+    return true;
 }
 
 // ── Email template builder ────────────────────────────────────

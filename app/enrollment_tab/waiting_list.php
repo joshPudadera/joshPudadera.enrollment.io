@@ -3,32 +3,82 @@ session_start();
 require_once __DIR__ . '/../shared/db.php';
 require_enrollment_tables($conn);
 if (empty($_SESSION['user_id']))   { header('Location: ../auth/signin.php'); exit; }
-if ($_SESSION['role'] !== 'admin') { header('Location: ../admin_dashboard/dashboard.php'); exit; }
+if (!is_admin_or_staff()) { header('Location: ../auth/signin.php'); exit; }
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'U', 0, 1));
 
-// ── Waiting list: all students with no section assigned ────────
-// Includes both those explicitly in waiting_list table AND those
-// who have an enrollment row but no waiting_list entry yet.
+// ── Filters & pagination ────────────────────────────────────────
+$search        = trim($_GET['q']      ?? '');
+$filter_course = trim($_GET['course'] ?? '');
+$filter_yr     = trim($_GET['year']   ?? '');
+$rows_per_page = 10;
+$page_a        = max(1, (int)($_GET['page_a'] ?? 1)); // active queue page
+$page_h        = max(1, (int)($_GET['page_h'] ?? 1)); // history page
 
-// Students in the formal waiting_list queue
-$queue = [];
-$res = $conn->query(
-    "SELECT w.id AS wl_id, w.queue_position, w.reason, w.status AS wl_status, w.queued_at,
-            w.pre_reg_id, w.course, w.year_level,
-            p.first_name, p.last_name, p.ref_number,
-            e.id AS enrollment_id, e.id_number, e.section, e.grade_confirmed
-     FROM waiting_list w
+$base_where = "1=1";
+if ($search) {
+    $esc = $conn->real_escape_string($search);
+    $base_where .= " AND (p.first_name LIKE '%$esc%' OR p.last_name LIKE '%$esc%' OR e.id_number LIKE '%$esc%')";
+}
+if ($filter_course) {
+    $esc = $conn->real_escape_string($filter_course);
+    $base_where .= " AND w.course LIKE '%$esc%'";
+}
+if ($filter_yr) {
+    $esc = $conn->real_escape_string($filter_yr);
+    $base_where .= " AND w.year_level = '$esc'";
+}
+
+$active_count = (int)$conn->query(
+    "SELECT COUNT(*) c FROM waiting_list w
      JOIN pre_registrations p ON w.pre_reg_id = p.id
      LEFT JOIN enrollments e ON e.pre_reg_id = w.pre_reg_id
-     ORDER BY w.status ASC, w.queue_position ASC"
-);
-if ($res) while ($r = $res->fetch_assoc()) $queue[] = $r;
+     WHERE w.status='Waiting' AND $base_where"
+)->fetch_assoc()['c'];
 
-// Active (Waiting) vs history
-$active    = array_filter($queue, fn($q) => $q['wl_status'] === 'Waiting');
-$history   = array_filter($queue, fn($q) => $q['wl_status'] !== 'Waiting');
-$active    = array_values($active);
-$history   = array_values($history);
+$history_count = (int)$conn->query(
+    "SELECT COUNT(*) c FROM waiting_list w
+     JOIN pre_registrations p ON w.pre_reg_id = p.id
+     LEFT JOIN enrollments e ON e.pre_reg_id = w.pre_reg_id
+     WHERE w.status<>'Waiting' AND $base_where"
+)->fetch_assoc()['c'];
+
+$active_pages  = max(1, (int)ceil($active_count  / $rows_per_page));
+$history_pages = max(1, (int)ceil($history_count / $rows_per_page));
+$page_a = min($page_a, $active_pages);
+$page_h = min($page_h, $history_pages);
+
+$active_sql = "SELECT w.id AS wl_id, w.queue_position, w.reason, w.status AS wl_status, w.queued_at,
+                       w.pre_reg_id, w.course, w.year_level,
+                       p.first_name, p.last_name, p.ref_number,
+                       e.id AS enrollment_id, e.id_number, e.section, e.grade_confirmed
+                FROM waiting_list w
+                JOIN pre_registrations p ON w.pre_reg_id = p.id
+                LEFT JOIN enrollments e ON e.pre_reg_id = w.pre_reg_id
+                WHERE w.status='Waiting' AND $base_where
+                ORDER BY w.queue_position ASC
+                LIMIT $rows_per_page OFFSET " . (($page_a - 1) * $rows_per_page);
+
+$history_sql = "SELECT w.id AS wl_id, w.queue_position, w.reason, w.status AS wl_status, w.queued_at,
+                       w.pre_reg_id, w.course, w.year_level,
+                       p.first_name, p.last_name, p.ref_number,
+                       e.id AS enrollment_id, e.id_number, e.section, e.grade_confirmed
+                FROM waiting_list w
+                JOIN pre_registrations p ON w.pre_reg_id = p.id
+                LEFT JOIN enrollments e ON e.pre_reg_id = w.pre_reg_id
+                WHERE w.status<>'Waiting' AND $base_where
+                ORDER BY w.queued_at DESC
+                LIMIT $rows_per_page OFFSET " . (($page_h - 1) * $rows_per_page);
+
+$active  = [];
+$history = [];
+$res = $conn->query($active_sql);
+if ($res) while ($r = $res->fetch_assoc()) $active[] = $r;
+$res2 = $conn->query($history_sql);
+if ($res2) while ($r = $res2->fetch_assoc()) $history[] = $r;
+
+// Total waiting (unfiltered) for stat cards
+$waiting_total   = (int)$conn->query("SELECT COUNT(*) c FROM waiting_list WHERE status='Waiting'")->fetch_assoc()['c'];
+$promoted_total  = (int)$conn->query("SELECT COUNT(*) c FROM waiting_list WHERE status='Promoted'")->fetch_assoc()['c'];
 
 // Sections for the promote dropdown
 $sections  = [];
@@ -36,9 +86,6 @@ $rs = $conn->query("SELECT section_code, course, year_level, max_capacity,
                     (SELECT COUNT(*) FROM enrollments WHERE section=s.section_code) AS actual_count
                     FROM sections s WHERE is_active=1 ORDER BY section_code ASC");
 if ($rs) while ($r = $rs->fetch_assoc()) $sections[] = $r;
-
-$waiting_count  = count($active);
-$promoted_count = count(array_filter($history, fn($q) => $q['wl_status'] === 'Promoted'));
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -66,32 +113,44 @@ $promoted_count = count(array_filter($history, fn($q) => $q['wl_status'] === 'Pr
       <h2 class="page-title"><i class="fa-solid fa-list-ol"></i> Waiting List Queue</h2>
     </div>
 
-    <!-- Stat cards -->
-    <div class="info-row">
-      <div class="info-card">
-        <div class="card-label"><i class="fa-solid fa-clock" style="color:#f59e0b;"></i> Waiting</div>
-        <div class="card-amount" style="color:#f59e0b;"><?= $waiting_count ?></div>
-        <div class="card-detail">Students awaiting section</div>
+    <!-- Filter bar -->
+    <form method="GET" style="margin:0 24px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <div class="search-wrap" style="flex:1;min-width:200px;max-width:300px;">
+        <input type="text" name="q" value="<?= htmlspecialchars($search) ?>" placeholder="Search name or ID…"/>
+        <i class="fa-solid fa-magnifying-glass"></i>
       </div>
-      <div class="info-card">
-        <div class="card-label"><i class="fa-solid fa-circle-check" style="color:#16a34a;"></i> Promoted</div>
-        <div class="card-amount" style="color:#16a34a;"><?= $promoted_count ?></div>
-        <div class="card-detail">Assigned to a section</div>
-      </div>
-      <div class="info-card">
-        <div class="card-label"><i class="fa-solid fa-chalkboard" style="color:#2563eb;"></i> Sections Available</div>
-        <div class="card-amount" style="color:#2563eb;">
-          <?= count(array_filter($sections, fn($s) => (int)$s['actual_count'] < (int)$s['max_capacity'])) ?>
-        </div>
-        <div class="card-detail">Sections with open slots</div>
-      </div>
-    </div>
+      <select name="course" style="height:36px;border:1px solid #ddd;border-radius:8px;padding:0 10px;font-size:.82rem;background:#fff;">
+        <option value="">All Courses</option>
+        <?php foreach(['Information Technology','Computer Engineering','Library Information Science',
+                      'Psychology','Elementary Education','Technology and Livelihood Education',
+                      'Secondary Education','Physical Education','Criminology',
+                      'Accounting Information System','Entrepreneurship',
+                      'Marketing Management','Human Resource Management','Financial Management',
+                      'Office Administration','Tourism Management','Hospitality Management'] as $c): ?>
+        <option value="<?= $c ?>" <?= str_contains($filter_course,$c)?'selected':'' ?>><?= $c ?></option>
+        <?php endforeach; ?>
+      </select>
+      <select name="year" style="height:36px;border:1px solid #ddd;border-radius:8px;padding:0 10px;font-size:.82rem;background:#fff;">
+        <option value="">All Years</option>
+        <?php foreach(['1st Year','2nd Year','3rd Year','4th Year'] as $y): ?>
+        <option value="<?= $y ?>" <?= $filter_yr===$y?'selected':'' ?>><?= $y ?></option>
+        <?php endforeach; ?>
+      </select>
+      <button type="submit" class="btn-add" style="padding:7px 14px;font-size:.8rem;"><i class="fa-solid fa-filter"></i> Filter</button>
+      <?php if($search||$filter_course||$filter_yr): ?>
+      <a href="waiting_list.php" class="btn-secondary" style="padding:7px 12px;font-size:.8rem;text-decoration:none;">Clear</a>
+      <?php endif; ?>
+    </form>
 
     <!-- Active queue -->
     <div class="crud-card">
       <div class="crud-header">
-        <h3>Active Queue (<?= $waiting_count ?>)</h3>
-        <?php if ($waiting_count > 0): ?>
+        <h3>Active Queue
+          <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;">
+            <?= $active_count ?> student<?= $active_count!==1?'s':'' ?><?= ($search||$filter_course||$filter_yr)?' (filtered)':'' ?>
+          </span>
+        </h3>
+        <?php if ($waiting_total > 0): ?>
         <a href="section_assignment.php" class="btn-add">
           <i class="fa-solid fa-wand-magic-sparkles"></i> Go to Section Assignment
         </a>
@@ -176,20 +235,40 @@ $promoted_count = count(array_filter($history, fn($q) => $q['wl_status'] === 'Pr
           <?php endforeach; ?>
         </tbody>
       </table>
+      <?php if ($active_pages > 1): ?>
+      <div class="crud-pagination">
+        <?php
+        $qs = http_build_query(['q'=>$search,'course'=>$filter_course,'year'=>$filter_yr,'page_h'=>$page_h]);
+        if ($page_a > 1) echo "<a href='?$qs&page_a=".($page_a-1)."' class='pg-btn pg-label'>&laquo;</a>";
+        for ($p = max(1,$page_a-2); $p <= min($active_pages,$page_a+2); $p++)
+            echo "<a href='?$qs&page_a=$p' class='pg-btn".($p===$page_a?' active':'')."'>$p</a>";
+        if ($page_a < $active_pages) echo "<a href='?$qs&page_a=".($page_a+1)."' class='pg-btn pg-label'>&raquo;</a>";
+        ?>
+      </div>
+      <?php endif; ?>
       <?php else: ?>
       <div style="padding:32px;text-align:center;color:#aaa;font-size:.88rem;">
         <i class="fa-solid fa-circle-check" style="font-size:1.6rem;color:#16a34a;display:block;margin-bottom:10px;"></i>
-        Waiting list is empty — all students have been assigned to a section.
+        <?php if ($search||$filter_course||$filter_yr): ?>
+          No active queue entries match the current filters.
+        <?php else: ?>
+          Waiting list is empty — all students have been assigned to a section.
+        <?php endif; ?>
       </div>
       <?php endif; ?>
     </div>
 
     <!-- History -->
-    <?php if ($history): ?>
+    <?php if ($history || $history_count > 0): ?>
     <div class="crud-card">
       <div class="crud-header">
-        <h3>History — Processed Entries (<?= count($history) ?>)</h3>
+        <h3>History — Processed Entries
+          <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;">
+            <?= $history_count ?><?= ($search||$filter_course||$filter_yr)?' (filtered)':'' ?>
+          </span>
+        </h3>
       </div>
+      <?php if ($history): ?>
       <table class="crud-table">
         <thead><tr>
           <th>Name</th><th>Course</th><th>Year Level</th><th>Status</th><th>Section</th><th>Queued</th>
@@ -217,6 +296,20 @@ $promoted_count = count(array_filter($history, fn($q) => $q['wl_status'] === 'Pr
           <?php endforeach; ?>
         </tbody>
       </table>
+      <?php if ($history_pages > 1): ?>
+      <div class="crud-pagination">
+        <?php
+        $qs = http_build_query(['q'=>$search,'course'=>$filter_course,'year'=>$filter_yr,'page_a'=>$page_a]);
+        if ($page_h > 1) echo "<a href='?$qs&page_h=".($page_h-1)."' class='pg-btn pg-label'>&laquo;</a>";
+        for ($p = max(1,$page_h-2); $p <= min($history_pages,$page_h+2); $p++)
+            echo "<a href='?$qs&page_h=$p' class='pg-btn".($p===$page_h?' active':'')."'>$p</a>";
+        if ($page_h < $history_pages) echo "<a href='?$qs&page_h=".($page_h+1)."' class='pg-btn pg-label'>&raquo;</a>";
+        ?>
+      </div>
+      <?php endif; ?>
+      <?php else: ?>
+      <div style="padding:24px;text-align:center;color:#aaa;font-size:.85rem;">No history entries match the current filters.</div>
+      <?php endif; ?>
     </div>
     <?php endif; ?>
 

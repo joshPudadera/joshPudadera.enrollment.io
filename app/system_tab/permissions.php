@@ -10,18 +10,38 @@ $ACTIVE_NAV = 'users';
 $PAGE_TITLE = 'Users & Permissions';
 $PAGE_ICON  = 'fa-solid fa-shield-halved';
 
-// Fetch all users (no password_hash needed in the table)
+// Filters & pagination
+$search        = trim($_GET['q'] ?? '');
+$rows_per_page = 10;
+$page          = max(1, (int)($_GET['page'] ?? 1));
+
+$where = "1=1";
+if ($search) {
+    $esc = $conn->real_escape_string($search);
+    $where .= " AND (first_name LIKE '%$esc%' OR last_name LIKE '%$esc%'
+                     OR username LIKE '%$esc%' OR email LIKE '%$esc%')";
+}
+
+$total_users = (int)$conn->query("SELECT COUNT(*) c FROM users WHERE $where")->fetch_assoc()['c'];
+$total_pages = max(1, (int)ceil($total_users / $rows_per_page));
+$page = min($page, $total_pages);
+
 $users = [];
 $res = $conn->query(
     "SELECT id, username, first_name, last_name, email, role, created_at
-     FROM users ORDER BY role ASC, last_name ASC"
+     FROM users WHERE $where
+     ORDER BY role ASC, last_name ASC
+     LIMIT $rows_per_page OFFSET " . (($page - 1) * $rows_per_page)
 );
 if ($res) while ($r = $res->fetch_assoc()) $users[] = $r;
 
 $roles = [
-    'admin'   => ['Full system access', 'Manage students, enrollment, users', 'View all reports', '#2563eb'],
-    'student' => ['View own profile', 'Submit pre-registration', 'Upload documents', '#22c55e'],
+    'admin'  => ['Full system access', 'Manage students, enrollment, users', 'View all reports', '#2563eb'],
+    'staff'  => ['View all admin modules', 'Approve/validate students', 'Cannot add or delete data', '#7c3aed'],
+    'student'=> ['View own profile', 'Submit pre-registration', 'Upload documents', '#22c55e'],
 ];
+
+$role_icons = ['admin' => 'fa-crown', 'staff' => 'fa-user-tie', 'student' => 'fa-user'];
 
 ob_start();
 ?>
@@ -31,7 +51,7 @@ ob_start();
   <?php foreach ($roles as $role => [$p1,$p2,$p3,$color]): ?>
   <div class="table-card">
     <h3 style="text-transform:capitalize;color:<?= $color ?>;">
-      <i class="fa-solid fa-<?= $role==='admin' ? 'crown' : 'user' ?>"></i> <?= ucfirst($role) ?>
+      <i class="fa-solid <?= $role_icons[$role] ?? 'fa-user' ?>"></i> <?= ucfirst($role) ?>
     </h3>
     <ul style="margin:12px 0 0 18px;font-size:.82rem;color:#555;line-height:2;">
       <li><?= $p1 ?></li>
@@ -45,11 +65,30 @@ ob_start();
 <!-- User list -->
 <div class="crud-card">
   <div class="crud-header">
-    <h3>All Users (<?= count($users) ?>)</h3>
+    <h3>All Users
+      <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;">
+        <?= $total_users ?><?= $search?' (filtered)':'' ?>
+      </span>
+    </h3>
     <a href="../auth/register.php" class="btn-add">
       <i class="fa-solid fa-plus"></i> Add User
     </a>
   </div>
+
+  <!-- Search bar -->
+  <form method="GET" style="padding:0 0 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <div class="search-wrap" style="flex:1;min-width:220px;max-width:360px;">
+      <input type="text" name="q" value="<?= htmlspecialchars($search) ?>"
+             placeholder="Search by name, username or email…"/>
+      <i class="fa-solid fa-magnifying-glass"></i>
+    </div>
+    <button type="submit" class="btn-add" style="padding:7px 14px;font-size:.8rem;">
+      <i class="fa-solid fa-magnifying-glass"></i> Search
+    </button>
+    <?php if ($search): ?>
+    <a href="permissions.php" class="btn-secondary" style="padding:7px 12px;font-size:.8rem;text-decoration:none;">Clear</a>
+    <?php endif; ?>
+  </form>
 
   <table class="crud-table">
     <thead>
@@ -64,17 +103,44 @@ ob_start();
     </thead>
     <tbody>
       <?php if ($users): foreach ($users as $u):
-        $badge    = $u['role'] === 'admin' ? 'badge-active' : 'badge-inactive';
+        $role_color = match($u['role']) {
+            'admin'   => 'badge-active',
+            'staff'   => '',
+            default   => 'badge-inactive',
+        };
+        $role_style = $u['role'] === 'staff'
+            ? 'background:#faf5ff;color:#7c3aed;padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:700;'
+            : '';
         $uid      = (int)$u['id'];
         $uname    = htmlspecialchars($u['username']);
         $fullname = htmlspecialchars(trim($u['first_name'] . ' ' . $u['last_name']));
         $uemail   = htmlspecialchars($u['email']);
       ?>
-      <tr>
-        <td><?= $fullname ?></td>
+      <tr <?= $u['role'] === 'staff' ? 'style="background:#fdfbff;"' : '' ?>>
+        <td>
+          <div style="font-weight:600;"><?= $fullname ?></div>
+          <?php if ($u['role'] === 'staff'): ?>
+          <div style="font-size:.70rem;color:#7c3aed;margin-top:2px;">
+            <i class="fa-solid fa-user-tie"></i> Staff Account
+          </div>
+          <?php endif; ?>
+        </td>
         <td style="color:#2563eb;font-weight:600;"><?= $uname ?></td>
-        <td style="font-size:.78rem;color:#666;"><?= $uemail ?></td>
-        <td><span class="<?= $badge ?>"><?= ucfirst($u['role']) ?></span></td>
+        <td style="font-size:.78rem;">
+          <?= $uemail ?>
+          <?php if ($u['role'] === 'staff'): ?>
+          <div style="font-size:.68rem;color:#7c3aed;margin-top:2px;">
+            <i class="fa-solid fa-key"></i> Use Reset Password to change
+          </div>
+          <?php endif; ?>
+        </td>
+        <td>
+          <?php if ($role_style): ?>
+          <span style="<?= $role_style ?>"><?= ucfirst($u['role']) ?></span>
+          <?php else: ?>
+          <span class="<?= $role_color ?>"><?= ucfirst($u['role']) ?></span>
+          <?php endif; ?>
+        </td>
         <td style="font-size:.75rem;color:#888;"><?= date('M d, Y', strtotime($u['created_at'])) ?></td>
         <td style="text-align:center;">
           <button class="btn-reset-pw"
@@ -94,6 +160,17 @@ ob_start();
       <?php endif; ?>
     </tbody>
   </table>
+  <?php if ($total_pages > 1): ?>
+  <div class="crud-pagination">
+    <?php
+    $qs = http_build_query(['q' => $search]);
+    if ($page > 1) echo "<a href='?$qs&page=".($page-1)."' class='pg-btn pg-label'>&laquo;</a>";
+    for ($p = max(1,$page-2); $p <= min($total_pages,$page+2); $p++)
+        echo "<a href='?$qs&page=$p' class='pg-btn".($p===$page?' active':'')."'>$p</a>";
+    if ($page < $total_pages) echo "<a href='?$qs&page=".($page+1)."' class='pg-btn pg-label'>&raquo;</a>";
+    ?>
+  </div>
+  <?php endif; ?>
 </div>
 
 <!-- ── Reset Password Link Modal ── -->

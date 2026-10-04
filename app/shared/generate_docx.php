@@ -1,208 +1,187 @@
 <?php
 // ============================================================
 //  GENERATE_DOCX.PHP  (shared/)
-//  Admin-triggered endpoint that:
-//    1. Pulls all 3 AI-inspected documents for a pre_reg_id
-//       from the enrollment_documents table.
-//    2. Merges the extracted AI data into a single payload.
-//    3. Calls the Python script (generate_docx.py) to produce
-//       a .docx file using python-docx.
-//    4. Streams the generated file back to the browser as a
-//       download, or saves it and redirects with a success flag.
-//
-//  CALLED FROM:  admin/document_review.php  (POST)
-//  REQUIRES:     Python 3 + python-docx installed
-//                  pip install python-docx
+//  Generates a Word document compiled from ALL admission form
+//  data stored in pre_registrations for a given applicant.
+//  Does NOT rely on AI-extracted data.
 //
 //  POST params:
 //    pre_reg_id  — integer ID of the pre_registration row
-//    save_only   — optional "1" to save to disk instead of download
 // ============================================================
 session_start();
 require_once __DIR__ . '/db.php';
 
-if (empty($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    http_response_code(403);
-    die(json_encode(['success' => false, 'error' => 'Unauthorized']));
+// Return errors as JSON so JS can display them
+function fail(string $msg): void {
+    header('Content-Type: application/json');
+    echo json_encode(['success' => false, 'error' => $msg]);
+    exit;
+}
+
+if (empty($_SESSION['user_id']) || !is_admin_or_staff()) {
+    fail('Unauthorized');
 }
 
 $pre_reg_id = (int)($_POST['pre_reg_id'] ?? 0);
-$save_only  = ($_POST['save_only'] ?? '') === '1';
+if (!$pre_reg_id) fail('Missing pre_reg_id');
 
-if (!$pre_reg_id) {
-    die(json_encode(['success' => false, 'error' => 'Missing pre_reg_id']));
-}
+// ── Ensure all extra columns exist before SELECT ─────────────
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS middle_name VARCHAR(100) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS suffix VARCHAR(20) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS sex VARCHAR(20) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS civil_status VARCHAR(30) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS nationality VARCHAR(80) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS religion VARCHAR(100) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS place_of_birth VARCHAR(200) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS address VARCHAR(300) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS grad_year VARCHAR(20) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS emergency_name VARCHAR(150) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS emergency_relation VARCHAR(80) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS emergency_phone VARCHAR(30) DEFAULT NULL");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS branch VARCHAR(100) DEFAULT NULL");
 
-// ── 1. Fetch applicant info ───────────────────────────────────
-$stmt = $conn->prepare(
-    "SELECT * FROM pre_registrations WHERE id = ? LIMIT 1"
-);
+// ── Fetch applicant ───────────────────────────────────────────
+$stmt = $conn->prepare("SELECT * FROM pre_registrations WHERE id = ? LIMIT 1");
 $stmt->bind_param('i', $pre_reg_id);
 $stmt->execute();
 $applicant = $stmt->get_result()->fetch_assoc();
 $stmt->close();
 
-if (!$applicant) {
-    die(json_encode(['success' => false, 'error' => 'Applicant not found']));
-}
+if (!$applicant) fail('Applicant not found (ID: ' . $pre_reg_id . ')');
 
-// ── 2. Fetch all 3 required documents with AI results ────────
-// Ensure ai_result column exists (safe no-op if already there)
-@$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
-
-$stmt = $conn->prepare(
-    "SELECT document_type, file_path, file_name, ai_result, ai_inspected_at, status
-     FROM enrollment_documents
-     WHERE pre_reg_id = ?
-       AND document_type IN ('BirthCertificate','ReportCard','GoodMoral')
-     ORDER BY uploaded_at ASC"
+// ── Fetch submitted documents (any type, for reference) ───────
+$docs = [];
+$dres = $conn->prepare(
+    "SELECT document_type, file_name, status, ai_result, ai_inspected_at, uploaded_at
+     FROM enrollment_documents WHERE pre_reg_id = ? ORDER BY uploaded_at ASC"
 );
-$stmt->bind_param('i', $pre_reg_id);
-$stmt->execute();
-$rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-$stmt->close();
-$conn->close();
+$dres->bind_param('i', $pre_reg_id);
+$dres->execute();
+$doc_rows = $dres->get_result()->fetch_all(MYSQLI_ASSOC);
+$dres->close();
+// Note: $conn stays open — we still need it to save the generated_documents record later
 
-if (empty($rows)) {
-    die(json_encode(['success' => false, 'error' => 'No documents found for this applicant']));
-}
-
-// ── 3. Build merged data payload ─────────────────────────────
-// Start with applicant fields from pre_registrations table.
-// AI-extracted values fill in or confirm these fields per document.
+// ── Build payload ─────────────────────────────────────────────
 $payload = [
-    // ── APPLICANT (from pre_registrations) ──────────────────
-    // TODO: add these columns to your pre_registrations table as needed:
-    //   first_name, last_name, middle_name
-    //   email, phone
-    //   course, year_level, branch
-    //   address (full home address)
-    //   date_of_birth, place_of_birth, sex, nationality
-    //   guardian_name, guardian_relationship, guardian_contact
-    //   emergency_contact_name, emergency_contact_phone
-    //   lrn (Learner Reference Number from DepEd)
-    //   ref_number (BCP application reference)
-    //   submitted_at (application date)
     'applicant' => [
-        'ref_number'   => $applicant['ref_number']   ?? '',
-        'first_name'   => $applicant['first_name']   ?? '',
-        'last_name'    => $applicant['last_name']     ?? '',
-        'middle_name'  => $applicant['middle_name']   ?? '',
-        'email'        => $applicant['email']         ?? '',
-        'phone'        => $applicant['phone']         ?? '',
-        'course'       => $applicant['course']        ?? '',
-        'year_level'   => $applicant['year_level']    ?? '',
-        'branch'       => $applicant['branch']        ?? '',
-        'address'      => $applicant['address']       ?? '',
-        'submitted_at' => $applicant['submitted_at']  ?? '',
+        // Core identity
+        'ref_number'          => $applicant['ref_number']          ?? '',
+        'first_name'          => $applicant['first_name']          ?? '',
+        'last_name'           => $applicant['last_name']           ?? '',
+        'middle_name'         => $applicant['middle_name']         ?? '',
+        'suffix'              => $applicant['suffix']              ?? '',
+        // Personal details
+        'birthday'            => $applicant['birthday']            ?? '',
+        'sex'                 => $applicant['sex']                 ?? '',
+        'civil_status'        => $applicant['civil_status']        ?? '',
+        'nationality'         => $applicant['nationality']         ?? 'Filipino',
+        'religion'            => $applicant['religion']            ?? '',
+        'place_of_birth'      => $applicant['place_of_birth']      ?? '',
+        // Contact
+        'email'               => $applicant['email']               ?? '',
+        'phone'               => $applicant['phone']               ?? '',
+        'address'             => $applicant['address']             ?? '',
+        // Academic
+        'course'              => $applicant['course']              ?? '',
+        'year_level'          => $applicant['year_level']          ?? '',
+        'branch'              => $applicant['branch']              ?? '',
+        'applicant_type'      => $applicant['applicant_type']      ?? '',
+        'transfer_year_level' => $applicant['transfer_year_level'] ?? '',
+        'prev_school'         => $applicant['prev_school']         ?? '',
+        'grad_year'           => $applicant['grad_year']           ?? '',
+        // Emergency
+        'emergency_name'      => $applicant['emergency_name']      ?? '',
+        'emergency_relation'  => $applicant['emergency_relation']  ?? '',
+        'emergency_phone'     => $applicant['emergency_phone']     ?? '',
+        // Meta
+        'submitted_at'        => $applicant['submitted_at']        ?? '',
+        'status'              => $applicant['status']              ?? '',
     ],
-
-    // ── AI-EXTRACTED DATA per document type ─────────────────
-    // Populated below from ai_result JSON stored in enrollment_documents
-    'birth_certificate' => [],
-    'report_card'       => [],
-    'good_moral'        => [],
-
-    // ── DOCUMENT STATUSES ────────────────────────────────────
-    'statuses' => [],
-
-    // ── GENERATION META ──────────────────────────────────────
-    'generated_at' => date('Y-m-d H:i:s'),
-    'generated_by' => $_SESSION['first_name'] . ' ' . $_SESSION['last_name'],
+    'documents'     => $doc_rows,   // all uploaded docs with their AI results
+    'generated_at'  => date('Y-m-d H:i:s'),
+    'generated_by'  => trim(($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? '')),
 ];
 
-$type_map = [
-    'BirthCertificate' => 'birth_certificate',
-    'ReportCard'       => 'report_card',
-    'GoodMoral'        => 'good_moral',
-];
-
-foreach ($rows as $row) {
-    $key    = $type_map[$row['document_type']] ?? null;
-    if (!$key) continue;
-
-    $ai_raw = $row['ai_result'] ? json_decode($row['ai_result'], true) : null;
-    $ext    = $ai_raw['extracted'] ?? [];
-
-    $payload[$key] = array_merge([
-        'is_authentic'   => $ai_raw['is_authentic']  ?? null,
-        'confidence'     => $ai_raw['confidence']    ?? null,
-        'notes'          => $ai_raw['notes']         ?? '',
-        'red_flags'      => $ai_raw['red_flags']     ?? [],
-        'inspected_at'   => $row['ai_inspected_at']  ?? '',
-        'file_name'      => $row['file_name']        ?? '',
-    ], $ext);
-
-    $payload['statuses'][$row['document_type']] = $row['status'];
-}
-
-// ── 4. Locate the Python script and output directory ─────────
+// ── Locate Python + script ────────────────────────────────────
 $py_script  = __DIR__ . '/generate_docx.py';
 $output_dir = __DIR__ . '/../admin/generated_docs/';
+if (!is_dir($output_dir)) mkdir($output_dir, 0755, true);
 
-if (!is_dir($output_dir)) {
-    mkdir($output_dir, 0755, true);
-}
-
-// Sanitise filename using applicant name + pre_reg_id
 $safe_name   = preg_replace('/[^a-zA-Z0-9_-]/', '_',
-                    trim($applicant['last_name'] . '_' . $applicant['first_name']));
+                    trim(($applicant['last_name'] ?? 'Unknown') . '_' . ($applicant['first_name'] ?? '')));
 $output_file = $output_dir . 'admission_' . $safe_name . '_' . $pre_reg_id . '.docx';
 
-// ── 5. Write payload JSON to a temp file ─────────────────────
-$tmp_json = tempnam(sys_get_temp_dir(), 'docx_payload_') . '.json';
+$tmp_json = tempnam(sys_get_temp_dir(), 'docx_') . '.json';
 file_put_contents($tmp_json, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 
-// ── 6. Invoke Python ──────────────────────────────────────────
-// Try common install locations in order. The system PATH is often
-// not inherited by Apache/PHP on Windows, so we check explicit paths.
 $python_candidates = [
-    'C:\\Program Files\\Python312\\python.exe',   // installed this session
+    'C:\\Program Files\\Python312\\python.exe',
     'C:\\Program Files\\Python311\\python.exe',
     'C:\\Program Files\\Python310\\python.exe',
     'C:\\Python312\\python.exe',
-    'C:\\Python311\\python.exe',
-    'python3',   // Linux / Mac
-    'python',    // fallback
+    'python3', 'python',
 ];
 $python_bin = 'python';
-foreach ($python_candidates as $candidate) {
-    if (str_contains($candidate, '\\')) {
-        // Absolute path — check file exists
-        if (file_exists($candidate)) { $python_bin = $candidate; break; }
+foreach ($python_candidates as $c) {
+    if (str_contains($c, '\\')) {
+        if (file_exists($c)) { $python_bin = $c; break; }
     } else {
-        // Command name — test via exec
-        exec($candidate . ' --version 2>&1', $out, $rc);
-        if ($rc === 0) { $python_bin = $candidate; break; }
+        $ph = [['pipe','r'],['pipe','w'],['pipe','w']];
+        $pr = proc_open([$c, '--version'], $ph, $pp);
+        if (is_resource($pr)) { $rc = proc_close($pr); if ($rc === 0) { $python_bin = $c; break; } }
     }
 }
 
-$cmd    = escapeshellcmd($python_bin) . ' '
-        . escapeshellarg($py_script)  . ' '
-        . escapeshellarg($tmp_json)   . ' '
-        . escapeshellarg($output_file);
+$descriptors = [0 => ['pipe','r'], 1 => ['pipe','w'], 2 => ['pipe','w']];
+$proc        = proc_open([$python_bin, $py_script, $tmp_json, $output_file], $descriptors, $pipes);
 
-exec($cmd . ' 2>&1', $py_output, $py_exit);
-@unlink($tmp_json);   // clean up temp file
+if (!is_resource($proc)) {
+    @unlink($tmp_json);
+    fail('Failed to start Python process.');
+}
+
+fclose($pipes[0]);
+$py_out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+fclose($pipes[1]); fclose($pipes[2]);
+$py_exit = proc_close($proc);
+@unlink($tmp_json);   // delete AFTER Python has finished reading it
 
 if ($py_exit !== 0 || !file_exists($output_file)) {
-    $detail = implode("\n", $py_output);
-    die(json_encode([
-        'success' => false,
-        'error'   => 'Python script failed. Make sure python-docx is installed: pip install python-docx',
-        'detail'  => $detail,
-    ]));
+    fail('Document generation failed: ' . trim($py_out));
 }
 
-// ── 7. Stream to browser OR save and redirect ─────────────────
-if ($save_only) {
-    // Store relative path in session for the admin to download later
-    $rel = 'generated_docs/' . basename($output_file);
-    echo json_encode(['success' => true, 'file' => $rel]);
-    exit;
-}
+// ── Save record to generated_documents table ──────────────────
+@$conn->query("CREATE TABLE IF NOT EXISTS generated_documents (
+    id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    pre_reg_id   INT UNSIGNED NOT NULL,
+    file_name    VARCHAR(300) NOT NULL,
+    file_path    VARCHAR(500) NOT NULL,
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    generated_by VARCHAR(150) DEFAULT NULL,
+    INDEX idx_pre_reg (pre_reg_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+@$conn->query("ALTER TABLE generated_documents ADD UNIQUE INDEX IF NOT EXISTS uq_pre_reg (pre_reg_id)");
 
-// Direct download
+$rel_path    = 'admin/generated_docs/' . basename($output_file);
+$gen_by      = trim(($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? ''));
+$fname_store = basename($output_file);
+
+// Upsert — replace if re-generated for same applicant
+$ins = $conn->prepare(
+    "INSERT INTO generated_documents (pre_reg_id, file_name, file_path, generated_by)
+     VALUES (?,?,?,?)
+     ON DUPLICATE KEY UPDATE
+       file_name=VALUES(file_name), file_path=VALUES(file_path),
+       generated_at=NOW(), generated_by=VALUES(generated_by)"
+);
+// Add unique key if not present
+@$conn->query("ALTER TABLE generated_documents ADD UNIQUE INDEX IF NOT EXISTS uq_pre_reg (pre_reg_id)");
+$ins->bind_param('isss', $pre_reg_id, $fname_store, $rel_path, $gen_by);
+$ins->execute();
+$ins->close();
+$conn->close();
+
+// ── Stream as download ────────────────────────────────────────
 $filename = basename($output_file);
 header('Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 header('Content-Disposition: attachment; filename="' . $filename . '"');

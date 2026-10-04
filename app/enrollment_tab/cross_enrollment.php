@@ -3,29 +3,49 @@ session_start();
 require_once __DIR__ . '/../shared/db.php';
 require_enrollment_tables($conn);
 if (empty($_SESSION['user_id']))   { header('Location: ../auth/signin.php'); exit; }
-if ($_SESSION['role'] !== 'admin') { header('Location: ../admin_dashboard/dashboard.php'); exit; }
+if (!is_admin_or_staff()) { header('Location: ../auth/signin.php'); exit; }
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'U', 0, 1));
 
 // ── Step 5 of pipeline: Cross Enrollment ─────────────────────
-// Gate: grade_confirmed = 1 (grade level must be confirmed first)
-// This step is optional for regular students — admin reviews each
-// enrollment and marks cross-enrolled ones with their home school.
-// Students who are NOT cross-enrolled are simply left as-is and
-// will proceed to section assignment.
+// Gate: grade_confirmed = 1
 
-// Students pending cross-enrollment review (grade confirmed, no section yet)
+// Filters & pagination
+$search        = trim($_GET['q']      ?? '');
+$filter_course = trim($_GET['course'] ?? '');
+$rows_per_page = 10;
+$page          = max(1, (int)($_GET['page'] ?? 1));
+
+$base_where = "e.grade_confirmed = 1 AND (e.section IS NULL OR e.section = '' OR e.section = 'TBA')";
+if ($search) {
+    $esc = $conn->real_escape_string($search);
+    $base_where .= " AND (p.first_name LIKE '%$esc%' OR p.last_name LIKE '%$esc%' OR e.id_number LIKE '%$esc%')";
+}
+if ($filter_course) {
+    $esc = $conn->real_escape_string($filter_course);
+    $base_where .= " AND e.course LIKE '%$esc%'";
+}
+
+$total_count = (int)$conn->query(
+    "SELECT COUNT(*) c FROM enrollments e
+     JOIN pre_registrations p ON e.pre_reg_id = p.id
+     WHERE $base_where"
+)->fetch_assoc()['c'];
+
+$total_pages = max(1, (int)ceil($total_count / $rows_per_page));
+$page = min($page, $total_pages);
+
 $pending = [];
 $res = $conn->query(
     "SELECT e.*, p.first_name, p.last_name, p.ref_number
      FROM enrollments e
      JOIN pre_registrations p ON e.pre_reg_id = p.id
-     WHERE e.grade_confirmed = 1
-       AND (e.section IS NULL OR e.section = '' OR e.section = 'TBA')
-     ORDER BY e.is_cross DESC, p.last_name ASC"
+     WHERE $base_where
+     ORDER BY e.is_cross DESC, p.last_name ASC
+     LIMIT $rows_per_page OFFSET " . (($page - 1) * $rows_per_page)
 );
 if ($res) while ($r = $res->fetch_assoc()) $pending[] = $r;
 
-// Students blocked (grade not yet confirmed)
+// Students blocked (grade not yet confirmed) — unfiltered count for the warning banner
 $blocked_count = 0;
 $bc = $conn->query("SELECT COUNT(*) c FROM enrollments WHERE grade_confirmed = 0");
 if ($bc) $blocked_count = (int)$bc->fetch_assoc()['c'];
@@ -80,11 +100,37 @@ if ($bc) $blocked_count = (int)$bc->fetch_assoc()['c'];
     </div>
     <?php endif; ?>
 
+    <!-- Filter bar -->
+    <form method="GET" style="margin:0 24px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <div class="search-wrap" style="flex:1;min-width:200px;max-width:320px;">
+        <input type="text" name="q" value="<?= htmlspecialchars($search) ?>" placeholder="Search name or ID number…"/>
+        <i class="fa-solid fa-magnifying-glass"></i>
+      </div>
+      <select name="course" style="height:36px;border:1px solid #ddd;border-radius:8px;padding:0 10px;font-size:.82rem;background:#fff;">
+        <option value="">All Courses</option>
+        <?php foreach(['Information Technology','Computer Engineering','Library Information Science',
+                      'Psychology','Elementary Education','Technology and Livelihood Education',
+                      'Secondary Education','Physical Education','Criminology',
+                      'Accounting Information System','Entrepreneurship',
+                      'Marketing Management','Human Resource Management','Financial Management',
+                      'Office Administration','Tourism Management','Hospitality Management'] as $c): ?>
+        <option value="<?= $c ?>" <?= str_contains($filter_course,$c)?'selected':'' ?>><?= $c ?></option>
+        <?php endforeach; ?>
+      </select>
+      <button type="submit" class="btn-add" style="padding:7px 14px;font-size:.8rem;"><i class="fa-solid fa-filter"></i> Filter</button>
+      <?php if($search||$filter_course): ?>
+      <a href="cross_enrollment.php" class="btn-secondary" style="padding:7px 12px;font-size:.8rem;text-decoration:none;">Clear</a>
+      <?php endif; ?>
+      <span style="font-size:.78rem;color:#aaa;white-space:nowrap;">
+        <?= $total_count ?> record<?= $total_count!==1?'s':'' ?><?= ($search||$filter_course)?' (filtered)':'' ?>
+      </span>
+    </form>
+
     <div class="crud-card">
       <div class="crud-header">
         <h3>Enrollment Records
           <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;">
-            <?= count($pending) ?> awaiting section assignment
+            awaiting section assignment
           </span>
         </h3>
       </div>
@@ -126,9 +172,22 @@ if ($bc) $blocked_count = (int)$bc->fetch_assoc()['c'];
           <?php endforeach; ?>
         </tbody>
       </table>
+      <?php if ($total_pages > 1): ?>
+      <div class="crud-pagination">
+        <?php
+        $qs = http_build_query(['q'=>$search,'course'=>$filter_course]);
+        if ($page > 1) echo "<a href='?$qs&page=".($page-1)."' class='pg-btn pg-label'>&laquo;</a>";
+        for ($p = max(1,$page-2); $p <= min($total_pages,$page+2); $p++)
+            echo "<a href='?$qs&page=$p' class='pg-btn".($p===$page?' active':'')."'>$p</a>";
+        if ($page < $total_pages) echo "<a href='?$qs&page=".($page+1)."' class='pg-btn pg-label'>&raquo;</a>";
+        ?>
+      </div>
+      <?php endif; ?>
       <?php else: ?>
       <div style="padding:28px;text-align:center;color:#aaa;font-size:.88rem;">
-        <?php if ($blocked_count > 0): ?>
+        <?php if ($search||$filter_course): ?>
+          No records match the current filters.
+        <?php elseif ($blocked_count > 0): ?>
           No students ready yet — complete grade level assignment first.
         <?php else: ?>
           No students awaiting section assignment.
