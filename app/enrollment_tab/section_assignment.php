@@ -521,9 +521,9 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
                 <tr style="border-bottom:1px solid #f9fafb;">
                   <td style="padding:10px 16px;color:#aaa;"><?= $i+1 ?></td>
                   <td style="padding:10px 16px;font-weight:600;color:#1a1a2e;">
-                    <?= htmlspecialchars($st['first_name'].' '.$st['last_name']) ?>
+                    <?= htmlspecialchars(($st['first_name'] ?? '').' '.($st['last_name'] ?? '')) ?>
                   </td>
-                  <td style="padding:10px 16px;color:#555;"><?= htmlspecialchars($st['year_level']) ?></td>
+                  <td style="padding:10px 16px;color:#555;"><?= htmlspecialchars($st['year_level'] ?? '') ?></td>
                   <td style="padding:10px 16px;">
                     <code style="font-size:.75rem;background:#eff6ff;color:#2563eb;padding:2px 8px;border-radius:4px;">
                       <?= htmlspecialchars($st['id_number'] ?? '—') ?>
@@ -560,12 +560,12 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
         </thead>
         <tbody id="unassignedTbody">
           <?php foreach ($unassigned as $e): ?>
-          <tr data-id="<?= $e['id'] ?>" data-course="<?= htmlspecialchars($e['course']) ?>" data-year="<?= htmlspecialchars($e['year_level']) ?>">
+          <tr data-id="<?= (int)$e['id'] ?>" data-course="<?= htmlspecialchars($e['course'] ?? '') ?>" data-year="<?= htmlspecialchars($e['year_level'] ?? '') ?>">
             <td><code style="font-size:.75rem;background:#eff6ff;color:#2563eb;padding:2px 8px;border-radius:4px;">
-              <?= htmlspecialchars($e['id_number']) ?></code></td>
-            <td><?= htmlspecialchars($e['first_name'].' '.$e['last_name']) ?></td>
-            <td style="font-size:.75rem;"><?= htmlspecialchars(preg_replace('/Bachelor of Science in /i','BS ',$e['course'])) ?></td>
-            <td><?= htmlspecialchars($e['year_level']) ?></td>
+              <?= htmlspecialchars($e['id_number'] ?? '—') ?></code></td>
+            <td><?= htmlspecialchars(($e['first_name'] ?? '').' '.($e['last_name'] ?? '')) ?></td>
+            <td style="font-size:.75rem;"><?= htmlspecialchars(preg_replace('/Bachelor of Science in /i','BS ',$e['course'] ?? '')) ?></td>
+            <td><?= htmlspecialchars($e['year_level'] ?? '') ?></td>
             <td>
               <div style="display:flex;gap:8px;align-items:center;">
                 <select class="section-select"
