@@ -17,10 +17,8 @@ $has_pre_reg = $col_check && $col_check->num_rows > 0;
 
 // Build WHERE
 // Always JOIN enrollments so we get live pipeline data.
+// Show ALL students regardless of pre_reg_id — seed/test data has no pre-reg.
 $where_parts = ['1=1'];
-if ($has_pre_reg) {
-    $where_parts = ["(s.pre_reg_id IS NOT NULL OR p.status IN ('Approved','Enrolled'))"];
-}
 
 if ($search !== '') {
     $esc = $conn->real_escape_string($search);
@@ -91,7 +89,7 @@ if ($has_pre_reg) {
     $base_join = "FROM students s
                   LEFT JOIN pre_registrations p ON s.pre_reg_id = p.id
                   LEFT JOIN enrollments e ON e.pre_reg_id = s.pre_reg_id
-                  WHERE (s.pre_reg_id IS NOT NULL OR p.status IN ('Approved','Enrolled'))";
+                  WHERE 1=1";
     $sc = $conn->query("SELECT
         SUM(e.id IS NULL) AS no_id,
         SUM(e.id IS NOT NULL AND e.grade_confirmed=0) AS no_grade,

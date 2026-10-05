@@ -301,162 +301,115 @@ if ($stmt2) {
     $stmt2->close();
 }
 
-// ── Sample students — 50 per year level (200 total) ────────────
-$_r = $conn->query("SELECT COUNT(*) c FROM students");
-$student_count = $_r ? (int)$_r->fetch_assoc()['c'] : 0;
-if ($student_count < 100) {
-    $courses = [
-        'Bachelor of Science in Information Technology',
-        'Bachelor of Science in Computer Engineering',
-        'Bachelor of Science in Psychology',
-        'Bachelor of Elementary Education',
-        'Bachelor of Secondary Education major in English',
-        'Bachelor of Science in Criminology',
-        'Bachelor of Science in Accounting Information System',
-        'Bachelor of Science in Entrepreneurship',
-        'Bachelor of Science in Business Administration major in Marketing Management',
-        'Bachelor of Science in Business Administration major in Human Resource Management',
-        'Bachelor of Science in Tourism Management',
-        'Bachelor of Science in Hospitality Management',
-    ];
-    $sections = [
-        '1st Year' => ['11A','11B','11C'],
-        '2nd Year' => ['21A','21B','21C'],
-        '3rd Year' => ['31A','31B','31C'],
-        '4th Year' => ['41A','41B','41C'],
-    ];
-    $first_names = ['Juan','Maria','Jose','Ana','Carlos','Liza','Ramon','Patricia',
-                    'Mark','Jenny','Rico','Sheila','Angelo','Claire','Danilo',
-                    'Rowena','Freddie','Aileen','Ronnie','Mylene','Bryan','Rosalie',
-                    'Eduardo','Vanessa','Kenneth','Grace','Patrick','Kristine','Arnold',
-                    'Maricel','Dante','Lovely','Rodel','Jasmine','Erwin','Carmela',
-                    'Jayson','Sheryl','Leo','Maricris','Alvin','Jonalyn','Ricky',
-                    'Glenda','Edgar','Hazel','Jerome','Abegail','Noel','Florinda'];
-    $last_names  = ['Santos','Reyes','Cruz','Garcia','Navarro','Fernandez','Ramos',
-                    'Torres','Mendoza','Pascual','Espinosa','Castillo','Morales','Aguilar',
-                    'Domingo','Lacson','Ilagan','Pineda','Ocampo','Bondoc','Villanueva',
-                    'Aquino','Bautista','Dela Cruz','Gonzales','Perez','Lim','Tan',
-                    'Ong','Yap','Chan','Chua','Co','Dy','Go','Sy','Uy','Velasco',
-                    'Miranda','Soriano','Dizon','Tolentino','Panganiban','Macapagal',
-                    'Dimaculangan','Magpantay','Baluyot','Manalo','Delos Santos','Alcantara'];
-    $statuses = ['Active','Active','Active','Active','Inactive']; // 80% active
-
-    $inserted = 0;
-    $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
-    foreach ($year_levels as $yl_idx => $yr) {
-        for ($i = 0; $i < 50; $i++) {
-            $fn  = $first_names[($i + $yl_idx * 13) % count($first_names)];
-            $ln  = $last_names[($i * 3 + $yl_idx * 7) % count($last_names)];
-            // Make names unique by appending a number if needed
-            $fn_u = $fn . ($yl_idx > 0 ? ' ' . chr(65 + $yl_idx) : '');
-            $course = $courses[$i % count($courses)];
-            $sec_list = $sections[$yr];
-            $sec = $sec_list[$i % count($sec_list)];
-            $birth_year = 2026 - (18 + ($yl_idx * 1));
-            $birth_month= str_pad(($i % 12) + 1, 2, '0', STR_PAD_LEFT);
-            $birth_day  = str_pad(($i % 28) + 1, 2, '0', STR_PAD_LEFT);
-            $bday = "$birth_year-$birth_month-$birth_day";
-            $phone = '0917' . str_pad(($yl_idx * 50 + $i + 10000000), 8, '0', STR_PAD_LEFT);
-            $status = $statuses[$i % count($statuses)];
-            $s = $conn->prepare(
-                "INSERT IGNORE INTO students (first_name,last_name,birthday,course,year_level,section,phone,status)
-                 VALUES (?,?,?,?,?,?,?,?)"
-            );
-            if ($s) {
-                $s->bind_param('ssssssss', $fn_u, $ln, $bday, $course, $yr, $sec, $phone, $status);
-                if ($s->execute()) $inserted++;
-                $s->close();
-            }
-        }
-    }
-    $done[] = "Seeded <strong>$inserted students</strong> (50 per year level × 4 = 200)";
-} else {
-    $done[] = "Students table already has <strong>$student_count</strong> records — skipped.";
-}
-
-// ── BSIT 1st Year — 49 students in section BSIT-1A ───────────
-$_bsit_check = $conn->query(
-    "SELECT COUNT(*) c FROM students
+// ── BSIT 1st Year — 49 unique test students with full pipeline ─────────────
+// Each student gets: pre_registration (Approved) + enrollment record + section BSIT-1A.
+// Names are all unique (no two students share the same first+last combination).
+$_bsit_pr_check = $conn->query(
+    "SELECT COUNT(*) c FROM pre_registrations
      WHERE course='Bachelor of Science in Information Technology'
-       AND year_level='1st Year' AND section='BSIT-1A'"
+       AND year_level='1st Year' AND status='Approved' AND ref_number LIKE 'BCP-IT-TEST-%'"
 );
-$_bsit_count = $_bsit_check ? (int)$_bsit_check->fetch_assoc()['c'] : 0;
+$_bsit_pr_count = $_bsit_pr_check ? (int)$_bsit_pr_check->fetch_assoc()['c'] : 0;
 
-if ($_bsit_count < 49) {
-    $bsit_first = ['James','Maria','Carlo','Ana','Miguel','Sofia','Kevin','Liza',
-                   'Patrick','Jenny','Ronald','Carla','Dennis','Hazel','Mark','Leah',
-                   'Jerome','Grace','Allan','Sheena','Arnold','Jessa','Bryan','Kath',
-                   'Ricky','Vanessa','Eduardo','Lovely','Danilo','Rowena','Freddie',
-                   'Aileen','Angelo','Claire','Leo','Maricris','Alvin','Jonalyn',
-                   'Dante','Jasmine','Erwin','Carmela','Jayson','Sheryl','Noel',
-                   'Florinda','Rico','Abegail','Ryan'];
-    $bsit_last  = ['Santos','Reyes','Cruz','Garcia','Navarro','Fernandez','Ramos',
-                   'Torres','Mendoza','Pascual','Espinosa','Castillo','Morales',
-                   'Aguilar','Domingo','Lacson','Ilagan','Pineda','Ocampo','Bondoc',
-                   'Villanueva','Aquino','Bautista','Dela Cruz','Gonzales','Perez',
-                   'Lim','Tan','Ong','Yap','Chan','Chua','Co','Dy','Go','Sy','Uy',
-                   'Velasco','Miranda','Soriano','Dizon','Tolentino','Panganiban',
-                   'Magpantay','Baluyot','Manalo','Alcantara','Delos Santos','Mateo'];
+if ($_bsit_pr_count < 49) {
+    // Ensure BSIT-1A section exists (created on-demand, not pre-seeded)
+    $conn->query("INSERT IGNORE INTO sections
+        (section_code,course,year_level,adviser_name,max_capacity,current_count)
+        VALUES ('BSIT-1A','Bachelor of Science in Information Technology','1st Year','Prof. Santos',50,0)");
+
+    // 49 fully unique first + last name combinations
+    $bsit_students = [
+        ['Alejandro','Bautista'],['Beatrice','Reyes'],['Christian','Santos'],
+        ['Diana','Cruz'],['Emmanuel','Garcia'],['Francesca','Navarro'],
+        ['Gabriel','Fernandez'],['Hannah','Ramos'],['Ivan','Torres'],
+        ['Jasmine','Mendoza'],['Karl','Pascual'],['Lorraine','Espinosa'],
+        ['Marcus','Castillo'],['Natalie','Morales'],['Oscar','Aguilar'],
+        ['Patricia','Domingo'],['Quincy','Lacson'],['Rebecca','Ilagan'],
+        ['Samuel','Pineda'],['Teresa','Ocampo'],['Ulysses','Bondoc'],
+        ['Veronica','Villanueva'],['Winston','Aquino'],['Xenia','Dela Cruz'],
+        ['Yolanda','Gonzales'],['Zachary','Perez'],['Abigail','Lim'],
+        ['Benedict','Tan'],['Cassandra','Ong'],['Dominic','Yap'],
+        ['Eleanor','Chan'],['Fabian','Chua'],['Giselle','Velasco'],
+        ['Hector','Miranda'],['Ingrid','Soriano'],['Jerome','Dizon'],
+        ['Katrina','Tolentino'],['Leonardo','Panganiban'],['Michelle','Magpantay'],
+        ['Nathan','Baluyot'],['Ophelia','Manalo'],['Pedro','Alcantara'],
+        ['Queenie','Mateo'],['Ramon','Padilla'],['Stephanie','Flores'],
+        ['Timothy','Bernardo'],['Ursula','Delos Santos'],['Victor','Acosta'],
+        ['Wanda','Dela Vega'],
+    ];
+
     $course_bsit = 'Bachelor of Science in Information Technology';
-    $bsit_inserted = 0;
-    for ($i = 0; $i < 49; $i++) {
-        $fn    = $bsit_first[$i % count($bsit_first)];
-        $ln    = $bsit_last[$i  % count($bsit_last)];
-        $by    = 2025 - (18 + ($i % 3));
-        $bm    = str_pad(($i % 12) + 1, 2, '0', STR_PAD_LEFT);
-        $bd    = str_pad(($i % 28) + 1, 2, '0', STR_PAD_LEFT);
+    $pr_inserted = $enr_inserted = $stu_inserted = 0;
+
+    foreach ($bsit_students as $idx => [$fn, $ln]) {
+        $ref   = 'BCP-IT-TEST-' . str_pad($idx + 1, 3, '0', STR_PAD_LEFT);
+        $slug  = strtolower(preg_replace('/[^a-z0-9]/', '.', trim(strtolower("$fn.$ln"))));
+        $email = $slug . '@test.bcp.edu.ph';
+        $phone = '0917' . str_pad(20000000 + $idx, 8, '0', STR_PAD_LEFT);
+        $by    = 2025 - (18 + ($idx % 4));
+        $bm    = str_pad(($idx % 12) + 1, 2, '0', STR_PAD_LEFT);
+        $bd    = str_pad(($idx % 28) + 1, 2, '0', STR_PAD_LEFT);
         $bday  = "$by-$bm-$bd";
-        $phone = '0917' . str_pad(10000000 + $i, 8, '0', STR_PAD_LEFT);
-        $s = $conn->prepare(
-            "INSERT IGNORE INTO students
-                (first_name,last_name,birthday,course,year_level,section,phone,status)
-             VALUES (?,?,?,?,?,?,?,'Active')"
+
+        // 1. Pre-registration (Approved, no portal account needed)
+        $stmt_pr = $conn->prepare(
+            "INSERT IGNORE INTO pre_registrations
+                (first_name,last_name,email,phone,birthday,course,year_level,
+                 applicant_type,student_type,ref_number,status,submitted_at)
+             VALUES (?,?,?,?,?,'Bachelor of Science in Information Technology',
+                     '1st Year','Freshman','New Regular',?,'Approved',NOW())"
         );
-        if ($s) {
-            $sec = 'BSIT-1A';
-            $yl  = '1st Year';
-            $s->bind_param('sssssss', $fn, $ln, $bday, $course_bsit, $yl, $sec, $phone);
-            if ($s->execute()) $bsit_inserted++;
-            $s->close();
+        $stmt_pr->bind_param('ssssss', $fn, $ln, $email, $phone, $bday, $ref);
+        if ($stmt_pr->execute()) {
+            $pr_inserted++;
+            $pre_id = (int)$conn->insert_id;
+        } else {
+            $stmt_pr->close();
+            continue;
         }
+        $stmt_pr->close();
+
+        // 2. Student record
+        $stmt_st = $conn->prepare(
+            "INSERT IGNORE INTO students
+                (pre_reg_id,first_name,last_name,birthday,course,year_level,section,phone,status)
+             VALUES (?,?,?,?,'Bachelor of Science in Information Technology','1st Year','BSIT-1A',?,'Active')"
+        );
+        $stmt_st->bind_param('issss', $pre_id, $fn, $ln, $bday, $phone);
+        if ($stmt_st->execute()) $stu_inserted++;
+        $stmt_st->close();
+
+        // 3. Enrollment record (ID generated + grade confirmed + section assigned)
+        $yr     = date('y');
+        $id_num = 'BCP-' . $yr . '-' . str_pad(50000 + $idx, 5, '0', STR_PAD_LEFT);
+        $stmt_enr = $conn->prepare(
+            "INSERT IGNORE INTO enrollments
+                (pre_reg_id,id_number,course,year_level,section,grade_confirmed,enrolled_at)
+             VALUES (?,?,'Bachelor of Science in Information Technology','1st Year','BSIT-1A',1,NOW())"
+        );
+        $stmt_enr->bind_param('is', $pre_id, $id_num);
+        if ($stmt_enr->execute()) {
+            $enr_inserted++;
+            $enr_id = (int)$conn->insert_id;
+            // Mark pre-reg as Enrolled
+            $conn->query("UPDATE pre_registrations SET status='Enrolled' WHERE id=$pre_id");
+            // Add to waiting_list as Promoted (pipeline complete)
+            $conn->query("INSERT IGNORE INTO waiting_list (pre_reg_id,course,year_level,queue_position,reason,status)
+                VALUES ($pre_id,'Bachelor of Science in Information Technology','1st Year',0,'Enrolled','Promoted')");
+        }
+        $stmt_enr->close();
     }
+
     // Sync section current_count
-    $conn->query(
-        "UPDATE sections SET current_count=(
-            SELECT COUNT(*) FROM students WHERE section='BSIT-1A'
-         ) WHERE section_code='BSIT-1A'"
-    );
-    $done[] = "Seeded <strong>$bsit_inserted BSIT 1st Year students</strong> in section BSIT-1A.";
+    $conn->query("UPDATE sections SET current_count=(
+        SELECT COUNT(*) FROM enrollments WHERE section='BSIT-1A'
+    ) WHERE section_code='BSIT-1A'");
+
+    $done[] = "Seeded <strong>$pr_inserted pre-registrations</strong>, <strong>$stu_inserted students</strong>, "
+            . "<strong>$enr_inserted enrollments</strong> for BSIT 1st Year — section BSIT-1A.";
 } else {
-    $done[] = "BSIT-1A already has <strong>$_bsit_count</strong> students — skipped.";
+    $done[] = "BSIT-1A test students already seeded (<strong>$_bsit_pr_count</strong> records) — skipped.";
 }
-// ── Sample sections ───────────────────────────────────────────
-run($conn, "INSERT IGNORE INTO sections (section_code,course,year_level,adviser_name,max_capacity,current_count) VALUES
-('BSIT-1A','Bachelor of Science in Information Technology','1st Year','Prof. Santos',50,17),
-('BSIT-1B','Bachelor of Science in Information Technology','1st Year','Prof. Reyes',50,16),
-('BSIT-2A','Bachelor of Science in Information Technology','2nd Year','Prof. Cruz',50,17),
-('BSIT-2B','Bachelor of Science in Information Technology','2nd Year','Prof. Garcia',50,16),
-('BSIT-3A','Bachelor of Science in Information Technology','3rd Year','Prof. Navarro',50,17),
-('BSIT-3B','Bachelor of Science in Information Technology','3rd Year','Prof. Fernandez',50,16),
-('BSIT-4A','Bachelor of Science in Information Technology','4th Year','Prof. Ramos',50,17),
-('BSIT-4B','Bachelor of Science in Information Technology','4th Year','Prof. Torres',50,16),
-('BSCPE-1A','Bachelor of Science in Computer Engineering','1st Year','Prof. Mendoza',50,17),
-('BSCPE-1B','Bachelor of Science in Computer Engineering','1st Year','Prof. Pascual',50,16),
-('BSCPE-2A','Bachelor of Science in Computer Engineering','2nd Year','Prof. Espinosa',50,17),
-('BSCPE-2B','Bachelor of Science in Computer Engineering','2nd Year','Prof. Castillo',50,16),
-('BSCPE-3A','Bachelor of Science in Computer Engineering','3rd Year','Prof. Morales',50,17),
-('BSCPE-3B','Bachelor of Science in Computer Engineering','3rd Year','Prof. Aguilar',50,16),
-('BSCPE-4A','Bachelor of Science in Computer Engineering','4th Year','Prof. Domingo',50,17),
-('BSCPE-4B','Bachelor of Science in Computer Engineering','4th Year','Prof. Lacson',50,16),
-('BSCRIM-1A','Bachelor of Science in Criminology','1st Year','Prof. Ilagan',50,17),
-('BSCRIM-2A','Bachelor of Science in Criminology','2nd Year','Prof. Pineda',50,17),
-('BSCRIM-3A','Bachelor of Science in Criminology','3rd Year','Prof. Ocampo',50,16),
-('BSCRIM-4A','Bachelor of Science in Criminology','4th Year','Prof. Bondoc',50,17),
-('BSHM-1A','Bachelor of Science in Hospitality Management','1st Year','Prof. Villanueva',50,16),
-('BSHM-2A','Bachelor of Science in Hospitality Management','2nd Year','Prof. Aquino',50,17),
-('BSHM-3A','Bachelor of Science in Hospitality Management','3rd Year','Prof. Bautista',50,16),
-('BSHM-4A','Bachelor of Science in Hospitality Management','4th Year','Prof. Dela Cruz',50,17)",
-'Seeded <strong>24 sections</strong> (all year levels × 4 courses)', $done, $errors);
 
 // ── Sample subjects ───────────────────────────────────────────
 $_r = $conn->query("SELECT COUNT(*) c FROM subjects");

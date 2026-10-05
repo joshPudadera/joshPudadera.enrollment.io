@@ -14,9 +14,6 @@ $col_check   = $conn->query("SHOW COLUMNS FROM students LIKE 'pre_reg_id'");
 $has_pre_reg = $col_check && $col_check->num_rows > 0;
 
 $where_parts = ['1=1'];
-if ($has_pre_reg) {
-    $where_parts = ["(s.pre_reg_id IS NOT NULL OR p.status IN ('Approved','Enrolled'))"];
-}
 
 if ($search !== '') {
     $esc = $conn->real_escape_string($search);
