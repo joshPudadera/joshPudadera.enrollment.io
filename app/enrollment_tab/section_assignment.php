@@ -169,12 +169,19 @@ if ($search) {
 $sections = [];
 $res = $conn->query(
     "SELECT s.*,
-            COUNT(e.id) AS actual_count,
+            (
+              SELECT COUNT(*) FROM enrollments e
+              WHERE e.section = s.section_code
+            ) +
+            (
+              SELECT COUNT(*) FROM students st
+              LEFT JOIN enrollments e2 ON e2.pre_reg_id = st.pre_reg_id
+              WHERE st.section = s.section_code
+                AND (e2.id IS NULL OR e2.section != st.section)
+            ) AS actual_count,
             50 AS effective_cap
      FROM sections s
-     LEFT JOIN enrollments e ON e.section = s.section_code
      $where
-     GROUP BY s.id
      ORDER BY s.course ASC, s.year_level ASC, s.section_code ASC"
 );
 if ($res) while ($r = $res->fetch_assoc()) {
@@ -188,14 +195,23 @@ if ($res) while ($r = $res->fetch_assoc()) {
 }
 
 // ── Students per section ──────────────────────────────────────
-// Map section_code → [ student rows ]
+// Two sources: (1) enrollments JOIN pre_registrations, (2) students table directly
+// Merge both so test-seeded students (with or without pre_reg) all appear.
 $section_students = [];
+
+// Source 1: via enrollments (pipeline students)
 $res3 = $conn->query(
-    "SELECT e.section, p.first_name, p.last_name, p.year_level, e.id_number, e.enrolled_at
+    "SELECT e.section,
+            COALESCE(p.first_name, s.first_name, 'Unknown') AS first_name,
+            COALESCE(p.last_name,  s.last_name,  'Student')  AS last_name,
+            COALESCE(e.year_level, s.year_level, '') AS year_level,
+            e.id_number,
+            e.enrolled_at
      FROM enrollments e
-     JOIN pre_registrations p ON e.pre_reg_id = p.id
-     WHERE e.section IS NOT NULL AND e.section != ''
-     ORDER BY e.section ASC, p.last_name ASC"
+     LEFT JOIN pre_registrations p ON e.pre_reg_id = p.id
+     LEFT JOIN students s ON s.pre_reg_id = e.pre_reg_id
+     WHERE e.section IS NOT NULL AND e.section != '' AND e.section != 'TBA'
+     ORDER BY e.section ASC, COALESCE(p.last_name, s.last_name) ASC"
 );
 if ($res3) {
     while ($r = $res3->fetch_assoc()) {
@@ -203,16 +219,53 @@ if ($res3) {
     }
 }
 
-// ── Get all unassigned enrollments — GATED: grade_confirmed=1 only ───
-$unassigned = [];
+// Source 2: students with a section set directly (no enrollment row, e.g. direct edit)
 $res4 = $conn->query(
-    "SELECT e.*, p.first_name, p.last_name FROM enrollments e
-     JOIN pre_registrations p ON e.pre_reg_id = p.id
+    "SELECT s.section,
+            s.first_name, s.last_name, s.year_level,
+            e.id_number,
+            s.created_at AS enrolled_at
+     FROM students s
+     LEFT JOIN enrollments e ON e.pre_reg_id = s.pre_reg_id
+     WHERE s.section IS NOT NULL AND s.section != '' AND s.section != 'TBA'
+       AND (e.id IS NULL OR e.section != s.section)
+     ORDER BY s.section ASC, s.last_name ASC"
+);
+if ($res4) {
+    while ($r = $res4->fetch_assoc()) {
+        $section_students[$r['section']][] = $r;
+    }
+}
+
+// ── Get all unassigned students — GATED: grade_confirmed=1 or no enrollment ──
+// Merges enrollments without section + students table entries without section
+$unassigned = [];
+
+// From enrollments (pipeline students with grade confirmed)
+$res_ua = $conn->query(
+    "SELECT e.id, e.pre_reg_id, e.id_number, e.year_level, e.course,
+            COALESCE(p.first_name, s.first_name, 'Unknown') AS first_name,
+            COALESCE(p.last_name,  s.last_name,  'Student')  AS last_name
+     FROM enrollments e
+     LEFT JOIN pre_registrations p ON e.pre_reg_id = p.id
+     LEFT JOIN students s ON s.pre_reg_id = e.pre_reg_id
      WHERE (e.section IS NULL OR e.section = '' OR e.section = 'TBA')
        AND e.grade_confirmed = 1
-     ORDER BY p.last_name ASC"
+     ORDER BY COALESCE(p.last_name, s.last_name) ASC"
 );
-if ($res4) while ($r = $res4->fetch_assoc()) $unassigned[] = $r;
+if ($res_ua) while ($r = $res_ua->fetch_assoc()) $unassigned[] = $r;
+
+// From students with no enrollment but section is TBA/empty
+$res_ub = $conn->query(
+    "SELECT NULL AS id, s.pre_reg_id, NULL AS id_number, s.year_level, s.course,
+            s.first_name, s.last_name
+     FROM students s
+     LEFT JOIN enrollments e ON e.pre_reg_id = s.pre_reg_id
+     WHERE e.id IS NULL
+       AND (s.section IS NULL OR s.section = '' OR s.section = 'TBA')
+     ORDER BY s.last_name ASC"
+);
+if ($res_ub) while ($r = $res_ub->fetch_assoc()) $unassigned[] = $r;
 
 // Count students still blocked (grade not confirmed)
 $blocked_grade = 0;

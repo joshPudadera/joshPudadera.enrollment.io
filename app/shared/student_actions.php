@@ -120,9 +120,25 @@ switch ($action) {
         $pre = $conn->query("SELECT pre_reg_id FROM students WHERE id=$id LIMIT 1")->fetch_assoc();
         if ($pre && $pre['pre_reg_id']) {
             $pid = (int)$pre['pre_reg_id'];
-            $conn->query("UPDATE enrollments SET section='$section_val' WHERE pre_reg_id=$pid");
 
-            // If being placed back in waiting list, ensure waiting_list entry exists/is re-opened
+            // Check if an enrollment row exists
+            $enr_check = $conn->query("SELECT id FROM enrollments WHERE pre_reg_id=$pid LIMIT 1");
+            $enr_row   = $enr_check ? $enr_check->fetch_assoc() : null;
+
+            if ($enr_row) {
+                // Update existing enrollment
+                $conn->query("UPDATE enrollments SET section='$section_val', grade_confirmed=1 WHERE pre_reg_id=$pid");
+            } else {
+                // No enrollment row — create one so section assignment page can see this student
+                $yr     = date('y');
+                $id_num = 'BCP-' . $yr . '-' . str_pad($pid + 90000, 5, '0', STR_PAD_LEFT);
+                $conn->query(
+                    "INSERT IGNORE INTO enrollments
+                        (pre_reg_id,id_number,course,year_level,section,grade_confirmed,enrolled_at)
+                     VALUES ($pid,'$id_num','$course','$year_level','$section_val',1,NOW())"
+                );
+            }
+
             if ($section_val === 'TBA') {
                 $wl_check = $conn->query("SELECT id,status FROM waiting_list WHERE pre_reg_id=$pid LIMIT 1");
                 if ($wl_check && $wl_row = $wl_check->fetch_assoc()) {
@@ -130,16 +146,13 @@ switch ($action) {
                         $conn->query("UPDATE waiting_list SET status='Waiting' WHERE pre_reg_id=$pid");
                     }
                 } else {
-                    // No waiting list entry — create one
                     $pos_r = $conn->query("SELECT COUNT(*)+1 n FROM waiting_list WHERE status='Waiting'");
                     $pos   = $pos_r ? (int)$pos_r->fetch_assoc()['n'] : 1;
                     $conn->query("INSERT IGNORE INTO waiting_list (pre_reg_id,course,year_level,queue_position,reason,status)
                                   VALUES ($pid,'$course','$year_level',$pos,'Reassigned to waiting list','Waiting')");
                 }
             } else {
-                // Being assigned to a real section — mark waiting list as Promoted
                 $conn->query("UPDATE waiting_list SET status='Promoted' WHERE pre_reg_id=$pid AND status='Waiting'");
-                // Sync sections.current_count
                 $conn->query("UPDATE sections SET current_count=(SELECT COUNT(*) FROM enrollments WHERE section='$section_val') WHERE section_code='$section_val'");
             }
         }
