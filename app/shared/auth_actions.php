@@ -123,18 +123,21 @@ case 'login':
              </p>"
         );
 
-        $sent = false;
+        $sent       = false;
+        $send_error = '';
         try {
             send_email($mfa_to, 'BCP Portal Login Code: ' . $mfa_code, $mfa_body);
             $sent = true;
         } catch (Throwable $e) {
-            error_log('[BCP MFA] Failed to send code to ' . $mfa_to . ': ' . $e->getMessage());
+            $send_error = $e->getMessage();
+            error_log('[BCP MFA] Failed to send code to ' . $mfa_to . ': ' . $send_error);
         }
 
         respond(true, 'mfa_required', [
-            'mfa'  => true,
-            'sent' => $sent,
-            'hint' => 'Check ' . $mfa_to . ' for your 6-digit code.',
+            'mfa'        => true,
+            'sent'       => $sent,
+            'hint'       => 'Check ' . $mfa_to . ' for your 6-digit code.',
+            'send_error' => $sent ? '' : $send_error, // shown in browser if email fails
         ]);
     }
 

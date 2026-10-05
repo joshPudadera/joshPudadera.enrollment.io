@@ -131,8 +131,16 @@ document.getElementById('signinForm').addEventListener('submit', async function 
         const data = await fetch('../shared/auth_actions.php', { method: 'POST', body: fd }).then(r => r.json());
         if (data.success) {
             if (data.mfa) {
-                // Admin/staff: go to MFA verification page
-                window.location.href = 'mfa.php';
+                if (!data.sent && data.send_error) {
+                    // Email failed — show the error directly so it can be diagnosed
+                    showError('Login verified but email failed to send: ' + data.send_error
+                        + ' — Check MAIL_HOST/PORT/PASS in .env or hosting environment variables.');
+                    btn.disabled  = false;
+                    btn.innerHTML = 'Sign In <i class="fa-solid fa-arrow-right"></i>';
+                } else {
+                    // Admin/staff: go to MFA verification page
+                    window.location.href = 'mfa.php';
+                }
             } else {
                 window.location.href = '../dashboard/loading.php';
             }

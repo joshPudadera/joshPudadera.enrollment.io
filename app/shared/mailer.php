@@ -43,10 +43,13 @@ function _mailer_config(): array {
         }
     }
 
-    // Fall back to environment variables (Docker / hosting)
+    // Server environment variables OVERRIDE .env values.
+    // Set MAIL_HOST, MAIL_PORT, MAIL_USER, MAIL_PASS, MAIL_ENCRYPT, MAIL_FROM_NAME
+    // in your hosting control panel to avoid storing credentials in files.
     foreach (['MAIL_HOST','MAIL_PORT','MAIL_USER','MAIL_PASS','MAIL_FROM_NAME','MAIL_ENCRYPT'] as $key) {
-        if (!isset($env[$key]) && getenv($key) !== false) {
-            $env[$key] = getenv($key);
+        $val = getenv($key);
+        if ($val !== false && $val !== '') {
+            $env[$key] = $val;
         }
     }
 
