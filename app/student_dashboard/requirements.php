@@ -18,11 +18,13 @@ $msg = $err   = '';
 
 // ── Ensure columns exist ──────────────────────────────────────
 if (enrollment_tables_exist($conn)) {
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS redacted_path VARCHAR(500) DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents MODIFY COLUMN redaction_status ENUM('pending','done','failed','skipped') NOT NULL DEFAULT 'pending'");
-    @$conn->query("ALTER TABLE enrollment_documents MODIFY COLUMN document_type ENUM('Form137','BirthCertificate','ReportCard','GoodMoral','IDPhoto','Other') NOT NULL");
+    mysqli_report(MYSQLI_REPORT_OFF);
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS redacted_path VARCHAR(500) DEFAULT NULL");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS redaction_status ENUM('pending','done','failed','skipped') NOT NULL DEFAULT 'pending'");
+    $conn->query("ALTER TABLE enrollment_documents MODIFY COLUMN redaction_status ENUM('pending','done','failed','skipped') NOT NULL DEFAULT 'pending'");
+    $conn->query("ALTER TABLE enrollment_documents MODIFY COLUMN document_type ENUM('Form137','BirthCertificate','ReportCard','GoodMoral','IDPhoto','Other') NOT NULL");
 }
 
 // ── Resolve student's pre-registration ───────────────────────

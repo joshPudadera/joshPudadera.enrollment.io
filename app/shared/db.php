@@ -49,6 +49,11 @@ if ($conn->errno) {
 
 $conn->set_charset('utf8mb4');
 
+// Disable strict exception mode globally so idempotent ALTER TABLE
+// statements across all pages don't throw exceptions on hosted servers
+// that have MYSQLI_REPORT_STRICT enabled by default.
+mysqli_report(MYSQLI_REPORT_OFF);
+
 // ── Session regeneration after MFA verify ────────────────────
 // Doing session_regenerate_id inside an AJAX call doesn't reliably
 // deliver the new cookie on hosted platforms. Instead we flag it and

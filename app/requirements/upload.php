@@ -8,17 +8,23 @@ $msg = $err = '';
 
 // ── Ensure extra columns exist (safe no-ops) ─────────────────
 if (enrollment_tables_exist($conn)) {
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS redacted_path VARCHAR(500) DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents MODIFY COLUMN redaction_status ENUM('pending','done','failed','skipped') NOT NULL DEFAULT 'pending'");
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS extracted_name VARCHAR(255) DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS extracted_dob DATE DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS extracted_sex VARCHAR(20) DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS extracted_citizenship VARCHAR(80) DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS name_match_status ENUM('match','mismatch','unverified') NOT NULL DEFAULT 'unverified'");
-    @$conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS name_match_notes TEXT DEFAULT NULL");
-    @$conn->query("ALTER TABLE enrollment_documents MODIFY COLUMN document_type ENUM('Form137','BirthCertificate','ReportCard','GoodMoral','IDPhoto','Other') NOT NULL");
+    // Disable strict exception mode so ALTER TABLE errors are silently ignored
+    mysqli_report(MYSQLI_REPORT_OFF);
+
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_result JSON DEFAULT NULL");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS ai_inspected_at TIMESTAMP NULL DEFAULT NULL");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS redacted_path VARCHAR(500) DEFAULT NULL");
+    // Add redaction_status if missing, THEN modify to ensure correct ENUM values
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS redaction_status ENUM('pending','done','failed','skipped') NOT NULL DEFAULT 'pending'");
+    $conn->query("ALTER TABLE enrollment_documents MODIFY COLUMN redaction_status ENUM('pending','done','failed','skipped') NOT NULL DEFAULT 'pending'");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS extracted_name VARCHAR(255) DEFAULT NULL");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS extracted_dob DATE DEFAULT NULL");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS extracted_sex VARCHAR(20) DEFAULT NULL");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS extracted_citizenship VARCHAR(80) DEFAULT NULL");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS name_match_status ENUM('match','mismatch','unverified') NOT NULL DEFAULT 'unverified'");
+    $conn->query("ALTER TABLE enrollment_documents ADD COLUMN IF NOT EXISTS name_match_notes TEXT DEFAULT NULL");
+    // Add document_type column if missing, then modify to correct ENUM
+    $conn->query("ALTER TABLE enrollment_documents MODIFY COLUMN document_type ENUM('Form137','BirthCertificate','ReportCard','GoodMoral','IDPhoto','Other') NOT NULL");
 }
 
 // ── Resolve the student's pre-registration ───────────────────
