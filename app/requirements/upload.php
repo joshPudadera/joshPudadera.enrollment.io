@@ -33,6 +33,47 @@ $auto_pre_reg_id = 0;
 $pre_reg_name    = '';
 $ref_err         = '';
 
+// ── Manual reference number lookup (works logged-in or not) ───
+// Must be checked BEFORE the user_id block so unauthenticated students
+// can still enter their ref number and get redirected to sign in.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['manual_ref'])) {
+    $manual_ref = strtoupper(trim($conn->real_escape_string($_POST['manual_ref'])));
+    $r_manual = $conn->query(
+        "SELECT id, ref_number, first_name, last_name, email, user_id
+         FROM pre_registrations
+         WHERE UPPER(ref_number)='$manual_ref'
+         ORDER BY submitted_at DESC LIMIT 1"
+    );
+    if ($r_manual && $row_m = $r_manual->fetch_assoc()) {
+        if (!empty($_SESSION['user_id'])) {
+            // Logged in: link immediately and reload
+            $uid_link = (int)$_SESSION['user_id'];
+            $conn->query("UPDATE pre_registrations SET user_id=$uid_link WHERE id=" . (int)$row_m['id']);
+            header('Location: upload.php?linked=1');
+            exit;
+        } else {
+            // Not logged in: store ref in session and send to sign-in
+            // After login the auto-lookup will find it via email or user_id
+            $_SESSION['pending_ref']        = $row_m['ref_number'];
+            $_SESSION['pending_pre_reg_id'] = (int)$row_m['id'];
+            // Redirect to sign-in; after login they'll land on the dashboard
+            // which links to requirements/upload.php
+            header('Location: ../auth/signin.php?ref_pending=1');
+            exit;
+        }
+    } else {
+        $ref_err = 'Reference number not found. Please check and try again.';
+    }
+}
+
+// ── Link pending ref to account after login ───────────────────
+if (!empty($_SESSION['user_id']) && !empty($_SESSION['pending_pre_reg_id'])) {
+    $uid_link  = (int)$_SESSION['user_id'];
+    $pid_link  = (int)$_SESSION['pending_pre_reg_id'];
+    $conn->query("UPDATE pre_registrations SET user_id=$uid_link WHERE id=$pid_link AND (user_id IS NULL OR user_id=0)");
+    unset($_SESSION['pending_ref'], $_SESSION['pending_pre_reg_id']);
+}
+
 if (!empty($_SESSION['user_id'])) {
     $uid = (int)$_SESSION['user_id'];
 
@@ -65,28 +106,6 @@ if (!empty($_SESSION['user_id'])) {
                 $pre_reg_name    = trim(($row2['first_name'] ?? '') . ' ' . ($row2['last_name'] ?? ''));
                 $conn->query("UPDATE pre_registrations SET user_id=$uid WHERE id=$auto_pre_reg_id");
             }
-        }
-    }
-
-    // 3. By reference number manually entered by the student
-    if (!$auto_pre_reg_id && $_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['manual_ref'])) {
-        $manual_ref = strtoupper(trim($conn->real_escape_string($_POST['manual_ref'])));
-        $r3 = $conn->query(
-            "SELECT id, ref_number, first_name, last_name, email
-             FROM pre_registrations
-             WHERE UPPER(ref_number)='$manual_ref'
-             ORDER BY submitted_at DESC LIMIT 1"
-        );
-        if ($r3 && $row3 = $r3->fetch_assoc()) {
-            $auto_ref        = $row3['ref_number']  ?? '';
-            $auto_pre_reg_id = (int)$row3['id'];
-            $pre_reg_name    = trim(($row3['first_name'] ?? '') . ' ' . ($row3['last_name'] ?? ''));
-            // Link this pre-reg to the current portal account
-            $conn->query("UPDATE pre_registrations SET user_id=$uid WHERE id=$auto_pre_reg_id");
-            header('Location: upload.php?linked=1');
-            exit;
-        } else {
-            $ref_err = 'Reference number not found. Please check and try again.';
         }
     }
 }

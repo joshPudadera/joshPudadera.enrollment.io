@@ -28,11 +28,16 @@ if (enrollment_tables_exist($conn)) {
 }
 
 // ── Resolve student's pre-registration ───────────────────────
-// Primary: by user_id. Fallback: by email (handles cases where the form
-// was submitted before the portal account existed, so user_id was NULL/0).
 $auto_ref        = '';
 $auto_pre_reg_id = 0;
 $ref_err         = '';
+
+// Apply any pending ref link from the upload page (set before login)
+if (!empty($_SESSION['pending_pre_reg_id'])) {
+    $pid_link = (int)$_SESSION['pending_pre_reg_id'];
+    $conn->query("UPDATE pre_registrations SET user_id=$uid WHERE id=$pid_link AND (user_id IS NULL OR user_id=0)");
+    unset($_SESSION['pending_ref'], $_SESSION['pending_pre_reg_id']);
+}
 
 $r = $conn->query(
     "SELECT id, ref_number, first_name, last_name

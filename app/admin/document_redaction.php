@@ -427,7 +427,7 @@ $ACTIVE_NAV = 'redaction';
                     <i class="fa-solid fa-eye-slash"></i> Original (PII visible — admin only)
                   </div>
                   <a href="<?= $orig_url ?>" target="_blank">
-                    <img src="<?= $orig_url ?>" alt="Original" loading="lazy"
+                    <img src="<?= $orig_url ?>" alt="Original"
                          onerror="this.closest('.preview-pane').innerHTML='<div style=\'padding:20px;text-align:center;color:#aaa;font-size:.8rem;\'>Preview unavailable</div>'"/>
                   </a>
                 </div>
@@ -437,7 +437,7 @@ $ACTIVE_NAV = 'redaction';
                   </div>
                   <?php if ($red_url): ?>
                   <a href="<?= $red_url ?>" target="_blank">
-                    <img src="<?= $red_url ?>" alt="Redacted" loading="lazy"
+                    <img src="<?= $red_url ?>" alt="Redacted"
                          onerror="this.closest('.preview-pane').innerHTML='<div style=\'padding:20px;text-align:center;color:#aaa;font-size:.8rem;\'>Redacted preview unavailable</div>'"/>
                   </a>
                   <div style="padding:6px 12px;font-size:.7rem;color:#16a34a;background:#f0fdf4;">

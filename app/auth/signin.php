@@ -71,8 +71,12 @@ if (!empty($_SESSION['user_id'])) {
         <i class="fa-solid fa-triangle-exclamation"></i>
         Verification session lost — this usually means your browser is blocking cookies or the server session expired. Please sign in again.
       </div>
+      <?php elseif (!empty($_GET['ref_pending'])): ?>
+      <div class="auth-error" style="display:block;margin-bottom:14px;background:#f0fdf4;color:#15803d;border-color:#86efac;">
+        <i class="fa-solid fa-circle-check"></i>
+        Reference number found! Sign in to link your application and upload documents.
+      </div>
       <?php endif; ?>
-
       <form id="signinForm" style="width:100%">
         <div class="form-group">
           <label>
