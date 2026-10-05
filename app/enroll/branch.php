@@ -25,13 +25,13 @@ include __DIR__ . '/header.php';
       <a href="course.php?branch=Main+Campus" class="option-card">
         <i class="fa-solid fa-building-columns"></i>
         <span class="option-card-title">Main Campus</span>
-        <span class="option-card-sub">Baliuag, Bulacan</span>
+        <span class="option-card-sub">Quezon City</span>
       </a>
 
       <a href="course.php?branch=Bulacan+Campus" class="option-card">
         <i class="fa-solid fa-city"></i>
         <span class="option-card-title">Bulacan Campus</span>
-        <span class="option-card-sub">Bulacan, Bulacan</span>
+        <span class="option-card-sub">Bulacan</span>
       </a>
 
     </div>

@@ -7,7 +7,7 @@
 (function () {
     'use strict';
 
-    var TIMEOUT_MS = 1 * 60 * 1000;  // 3 minutes total
+    var TIMEOUT_MS = 3 * 60 * 1000;  // 3 minutes total
     var WARN_MS    = 30 * 1000;       // warn 30 s before logout (at 2:30)
 
     // Build API and sign-in URL from _APP_ROOT set by sidebar
