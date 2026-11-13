@@ -6,14 +6,24 @@ if (empty($_SESSION['user_id'])) { header('Location: ../auth/signin.php'); exit;
 if (!is_admin_or_staff()) { header('Location: ../auth/signin.php'); exit; }
 $sess_initial = strtoupper(substr($_SESSION['first_name'] ?? 'U', 0, 1));
 
-$search = trim($_GET['q'] ?? '');
+// ── Ensure required columns ──────────────────────────────────
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS cross_status ENUM('Unchecked','Flagged','Cleared') NOT NULL DEFAULT 'Unchecked'");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS grade_confirmed TINYINT(1) NOT NULL DEFAULT 0");
+@$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS confirmed_year_level VARCHAR(50) DEFAULT NULL");
+
+// ── Step 6 of 7: ID Generation ───────────────────────────────
+// Gate:  p.status = 'Approved'
+//        AND p.grade_confirmed = 1   (grade level confirmed in Step 4)
+//        AND e.id IS NULL            (no enrollment row yet)
+// Section is NOT required — section assignment happens AFTER ID generation (Step 7).
+// After: Creates enrollment row with official ID number → fires external API.
+
+$search        = trim($_GET['q']      ?? '');
 $filter_course = trim($_GET['course'] ?? '');
-
 $rows_per_page = 10;
-$page = max(1, (int)($_GET['page'] ?? 1));
+$page          = max(1, (int)($_GET['page'] ?? 1));
 
-// ── Pending ID generation (with search/pagination) ──────────
-$pending_where = "p.status = 'Approved' AND e.id IS NULL";
+$pending_where = "p.status = 'Approved' AND p.grade_confirmed = 1 AND e.id IS NULL";
 if ($search) {
     $esc = $conn->real_escape_string($search);
     $pending_where .= " AND (p.first_name LIKE '%$esc%' OR p.last_name LIKE '%$esc%'
@@ -23,18 +33,22 @@ if ($filter_course) {
     $esc = $conn->real_escape_string($filter_course);
     $pending_where .= " AND p.course LIKE '%$esc%'";
 }
+
 $pending_count = (int)$conn->query(
-    "SELECT COUNT(*) c FROM pre_registrations p
+    "SELECT COUNT(*) c
+     FROM pre_registrations p
      LEFT JOIN enrollments e ON e.pre_reg_id = p.id
      WHERE $pending_where"
 )->fetch_assoc()['c'];
+
 $pending_pages = max(1, (int)ceil($pending_count / $rows_per_page));
 $page          = min($page, $pending_pages);
 $offset        = ($page - 1) * $rows_per_page;
 
 $apps = [];
 $res = $conn->query(
-    "SELECT p.* FROM pre_registrations p
+    "SELECT p.*
+     FROM pre_registrations p
      LEFT JOIN enrollments e ON e.pre_reg_id = p.id
      WHERE $pending_where
      ORDER BY p.submitted_at ASC
@@ -42,14 +56,20 @@ $res = $conn->query(
 );
 if ($res) while ($r = $res->fetch_assoc()) $apps[] = $r;
 
-// ── Recently generated (last 10) ───────────────────────────
+// Recently generated (last 20)
 $enrolled = [];
 $res2 = $conn->query(
-    "SELECT e.*, p.first_name, p.last_name FROM enrollments e
+    "SELECT e.*, p.first_name, p.last_name
+     FROM enrollments e
      JOIN pre_registrations p ON e.pre_reg_id = p.id
-     ORDER BY e.enrolled_at DESC LIMIT 10"
+     ORDER BY e.enrolled_at DESC LIMIT 20"
 );
 if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
+
+// Info counts for banners
+$not_grade = (int)$conn->query(
+    "SELECT COUNT(*) c FROM pre_registrations WHERE status='Approved' AND grade_confirmed=0"
+)->fetch_assoc()['c'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -69,8 +89,6 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
     .btn-primary:hover  { background: #142d6e; box-shadow: 0 2px 8px rgba(26,58,140,.35); }
     .btn-approve  { background: #16a34a; color: #fff; }
     .btn-approve:hover  { background: #15803d; }
-    .btn-reject   { background: #ef4444; color: #fff; }
-    .btn-reject:hover   { background: #dc2626; }
     .btn-secondary { background: #f3f4f6; color: #444; border: 1.5px solid #d0d7e2; }
     .btn-secondary:hover { background: #e5e7eb; }
   </style>
@@ -93,9 +111,22 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
       <h2 class="page-title"><i class="fa-solid fa-id-badge"></i> ID Number Generation</h2>
     </div>
 
+    <!-- Pipeline step indicator -->
+    <?php if ($not_grade > 0): ?>
+    <div style="margin:0 24px 12px;background:#fff7ed;border:1.5px solid #fcd34d;
+                border-radius:10px;padding:10px 16px;font-size:.82rem;color:#92400e;
+                display:flex;align-items:center;gap:10px;">
+      <i class="fa-solid fa-triangle-exclamation" style="flex-shrink:0;"></i>
+      <span>
+        <strong><?= $not_grade ?> student<?= $not_grade!==1?'s':'' ?></strong>
+        still need grade level confirmation before appearing here.
+        <a href="grade_assignment.php" style="color:#d97706;font-weight:700;">Go to Grade Assignment →</a>
+      </span>
+    </div>
+    <?php endif; ?>
+
     <!-- Pending ID generation -->
     <div class="crud-card">
-      <!-- Search + filter -->
       <form method="GET" style="padding:0 0 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         <div class="search-wrap" style="flex:1;min-width:200px;max-width:320px;">
           <input type="text" name="q" value="<?= htmlspecialchars($search) ?>" placeholder="Search name or ref no.…"/>
@@ -112,40 +143,68 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
           <option value="<?= $c ?>" <?= str_contains($filter_course,$c)?'selected':'' ?>><?= $c ?></option>
           <?php endforeach; ?>
         </select>
-        <button type="submit" class="btn-primary" style="padding:6px 14px;font-size:.8rem;"><i class="fa-solid fa-filter"></i> Filter</button>
-        <?php if($search||$filter_course): ?><a href="id_generation.php" class="btn-secondary" style="padding:6px 12px;font-size:.8rem;text-decoration:none;">Clear</a><?php endif; ?>
+        <button type="submit" class="btn-primary" style="padding:6px 14px;font-size:.8rem;">
+          <i class="fa-solid fa-filter"></i> Filter
+        </button>
+        <?php if($search||$filter_course): ?>
+        <a href="id_generation.php" class="btn-secondary" style="padding:6px 12px;font-size:.8rem;text-decoration:none;">Clear</a>
+        <?php endif; ?>
       </form>
-      <div class="crud-header"><h3>Approved — Pending ID (<?= $pending_count ?>)</h3></div>
+      <div class="crud-header">
+        <h3>Ready for ID Generation <span style="font-size:.75rem;font-weight:400;color:#888;">(<?= $pending_count ?>)</span></h3>
+      </div>
       <table class="crud-table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Course</th>
-            <th>Year Level</th>
-            <th>Submitted</th>
-            <th>Action</th>
+            <th>Name</th><th>Course</th><th>Year Level</th><th>Applicant Type</th><th>Submitted</th><th>Action</th>
           </tr>
         </thead>
         <tbody>
-          <?php if ($apps): foreach ($apps as $app): ?>
+          <?php if ($apps): foreach ($apps as $app):
+            $yr   = $app['confirmed_year_level'] ?: $app['year_level'];
+            $atype = $app['applicant_type'] ?? null;
+            $type_cfg = [
+                'Freshman'    => ['#dcfce7','#16a34a'],
+                'Senior High' => ['#eff6ff','#2563eb'],
+                'Octoberian'  => ['#faf5ff','#7c3aed'],
+                'Transferee'  => ['#fff7ed','#d97706'],
+            ][$atype] ?? ['#f3f4f6','#6b7280'];
+          ?>
           <tr>
-            <td><?= htmlspecialchars($app['first_name'].' '.$app['last_name']) ?></td>
-            <td style="font-size:.75rem;"><?= htmlspecialchars(preg_replace('/Bachelor of Science in /i','BS ',$app['course'])) ?></td>
-            <td><?= htmlspecialchars($app['year_level']) ?></td>
+            <td>
+              <strong><?= htmlspecialchars($app['first_name'].' '.$app['last_name']) ?></strong>
+              <div style="font-size:.7rem;color:#aaa;margin-top:1px;">Ref: <?= htmlspecialchars($app['ref_number'] ?? '—') ?></div>
+            </td>
+            <td style="font-size:.78rem;"><?= htmlspecialchars(preg_replace('/Bachelor of Science in /i','BS ',$app['course'])) ?></td>
+            <td><?= htmlspecialchars($yr) ?></td>
+            <td>
+              <?php if ($atype): ?>
+              <span style="background:<?= $type_cfg[0] ?>;color:<?= $type_cfg[1] ?>;
+                           border-radius:20px;padding:2px 8px;font-size:.7rem;font-weight:700;">
+                <?= htmlspecialchars($atype) ?>
+              </span>
+              <?php else: ?>
+              <span style="color:#aaa;font-size:.75rem;">—</span>
+              <?php endif; ?>
+            </td>
             <td style="font-size:.75rem;color:#888;"><?= date('M d, Y', strtotime($app['submitted_at'])) ?></td>
             <td>
               <button class="btn-primary btn-gen-id"
-                      data-id="<?= $app['id'] ?>"
+                      data-id="<?= (int)$app['id'] ?>"
                       data-name="<?= htmlspecialchars($app['first_name'].' '.$app['last_name']) ?>"
                       data-course="<?= htmlspecialchars($app['course']) ?>"
-                      data-year="<?= htmlspecialchars($app['year_level']) ?>">
+                      data-year="<?= htmlspecialchars($yr) ?>">
                 <i class="fa-solid fa-wand-magic-sparkles"></i> Generate ID
               </button>
             </td>
           </tr>
           <?php endforeach; else: ?>
-          <tr><td colspan="5" style="text-align:center;padding:24px;color:#aaa;">
-            No pending ID generations.
+          <tr><td colspan="6" style="text-align:center;padding:28px;color:#aaa;">
+            <?php if ($not_grade > 0): ?>
+              No students ready yet — complete Grade Assignment first.
+            <?php else: ?>
+              No students pending ID generation.
+            <?php endif; ?>
           </td></tr>
           <?php endif; ?>
         </tbody>
@@ -163,18 +222,13 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
       <?php endif; ?>
     </div>
 
-    <!-- Already enrolled with IDs -->
+    <!-- Recently generated -->
     <div class="crud-card">
       <div class="crud-header"><h3>Recently Generated IDs</h3></div>
       <table class="crud-table">
         <thead>
           <tr>
-            <th>ID Number</th>
-            <th>Name</th>
-            <th>Course</th>
-            <th>Year</th>
-            <th>Section</th>
-            <th>Date</th>
+            <th>ID Number</th><th>Name</th><th>Course</th><th>Year</th><th>Section</th><th>Date</th>
           </tr>
         </thead>
         <tbody>
@@ -184,7 +238,17 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
             <td><?= htmlspecialchars($e['first_name'].' '.$e['last_name']) ?></td>
             <td style="font-size:.75rem;"><?= htmlspecialchars(preg_replace('/Bachelor of Science in /i','BS ',$e['course'])) ?></td>
             <td><?= htmlspecialchars($e['year_level']) ?></td>
-            <td><?= $e['section'] ? htmlspecialchars($e['section']) : '<span style="color:#aaa;">—</span>' ?></td>
+            <td>
+              <?php if (!empty($e['section']) && $e['section'] !== 'TBA'): ?>
+              <code style="font-size:.73rem;background:#eff6ff;color:#2563eb;padding:2px 7px;border-radius:4px;">
+                <?= htmlspecialchars($e['section']) ?>
+              </code>
+              <?php else: ?>
+              <span style="color:#f59e0b;font-size:.72rem;font-weight:600;">
+                <i class="fa-solid fa-clock"></i> Awaiting Section
+              </span>
+              <?php endif; ?>
+            </td>
             <td style="font-size:.75rem;color:#888;"><?= date('M d, Y', strtotime($e['enrolled_at'])) ?></td>
           </tr>
           <?php endforeach; else: ?>
@@ -202,58 +266,54 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
 
 <!-- Confirm Modal -->
 <div class="modal-overlay" id="genConfirmModal">
-  <div class="modal" style="max-width:400px;width:90%;padding:28px 28px 20px;">
+  <div class="modal" style="max-width:420px;width:90%;padding:28px 28px 20px;">
     <h3 style="font-size:1rem;font-weight:700;color:#1a1a2e;margin-bottom:8px;">Generate Student ID</h3>
     <p id="genConfirmMsg" style="font-size:.88rem;color:#555;margin-bottom:20px;line-height:1.5;"></p>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
       <button id="genConfirmCancel" style="background:#f3f4f6;color:#444;border:1.5px solid #d0d7e2;border-radius:8px;padding:9px 20px;font-size:.85rem;font-weight:600;cursor:pointer;font-family:'Segoe UI',sans-serif;">Cancel</button>
-      <button id="genConfirmOk"     style="background:#1a3a8c;color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:'Segoe UI',sans-serif;">Generate ID</button>
+      <button id="genConfirmOk" style="background:#1a3a8c;color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:'Segoe UI',sans-serif;">Generate ID</button>
     </div>
   </div>
 </div>
 
 <!-- Result Modal -->
 <div class="modal-overlay" id="genResultModal">
-  <div class="modal" style="max-width:400px;width:90%;padding:28px;text-align:center;">
+  <div class="modal" style="max-width:420px;width:90%;padding:28px;text-align:center;">
     <i id="genResultIcon" class="fa-solid fa-circle-check" style="font-size:2.5rem;color:#16a34a;display:block;margin-bottom:14px;"></i>
     <h3 id="genResultTitle" style="font-size:1rem;font-weight:700;color:#1a1a2e;margin-bottom:8px;"></h3>
-    <p id="genResultMsg"   style="font-size:.88rem;color:#555;margin-bottom:20px;line-height:1.5;"></p>
-    <button id="genResultClose" style="background:#1a3a8c;color:#fff;border:none;border-radius:8px;padding:10px 32px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:'Segoe UI',sans-serif;">OK</button>
+    <p id="genResultMsg" style="font-size:.88rem;color:#555;margin-bottom:20px;line-height:1.5;"></p>
+    <button id="genResultClose" style="background:#1a3a8c;color:#fff;border:none;border-radius:8px;padding:10px 32px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:'Segoe UI',sans-serif;">
+      OK — Go to Section Assignment
+    </button>
   </div>
 </div>
 
-<script src="../js/sidebar.js"></script>
 <script src="../js/dashboard.js"></script>
 <script>
 (function() {
-    var API            = '../shared/enrollment_actions.php';
-    var confirmModal   = document.getElementById('genConfirmModal');
-    var confirmMsg     = document.getElementById('genConfirmMsg');
-    var confirmOk      = document.getElementById('genConfirmOk');
-    var confirmCancel  = document.getElementById('genConfirmCancel');
-    var resultModal    = document.getElementById('genResultModal');
-    var resultIcon     = document.getElementById('genResultIcon');
-    var resultTitle    = document.getElementById('genResultTitle');
-    var resultMsg      = document.getElementById('genResultMsg');
-    var resultClose    = document.getElementById('genResultClose');
-
-    var _pendingBtn = null;
+    var API           = '../shared/enrollment_actions.php';
+    var confirmModal  = document.getElementById('genConfirmModal');
+    var confirmMsg    = document.getElementById('genConfirmMsg');
+    var confirmOk     = document.getElementById('genConfirmOk');
+    var confirmCancel = document.getElementById('genConfirmCancel');
+    var resultModal   = document.getElementById('genResultModal');
+    var resultIcon    = document.getElementById('genResultIcon');
+    var resultTitle   = document.getElementById('genResultTitle');
+    var resultMsg     = document.getElementById('genResultMsg');
+    var resultClose   = document.getElementById('genResultClose');
+    var _pendingBtn   = null;
 
     function showConfirm(msg, btn) {
         confirmMsg.textContent = msg;
         confirmModal.classList.add('active');
         _pendingBtn = btn;
     }
-
     function hideConfirm() {
         confirmModal.classList.remove('active');
         _pendingBtn = null;
     }
-
     function showResult(success, title, msg) {
-        resultIcon.className = success
-            ? 'fa-solid fa-circle-check'
-            : 'fa-solid fa-circle-xmark';
+        resultIcon.className   = success ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark';
         resultIcon.style.color = success ? '#16a34a' : '#dc2626';
         resultTitle.textContent = title;
         resultMsg.textContent   = msg;
@@ -270,7 +330,7 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
         hideConfirm();
         if (!btn) return;
 
-        btn.disabled = true;
+        btn.disabled  = true;
         btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generating…';
 
         var fd = new FormData();
@@ -285,37 +345,35 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
                 var data;
                 try { data = JSON.parse(text); }
                 catch(e) {
-                    btn.disabled = false;
+                    btn.disabled  = false;
                     btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Generate ID';
                     showResult(false, 'Server Error', text.substring(0, 300));
                     return;
                 }
                 if (data.success) {
-                    showResult(true, 'ID Generated!', 'Student ID: ' + data.id_number);
+                    showResult(true, 'ID Generated!',
+                        'Student ID: ' + data.id_number +
+                        '\n\nSection assignment can now be completed in the next step.');
                     resultClose.onclick = function() {
                         resultModal.classList.remove('active');
-                        location.reload();
+                        window.location.href = 'section_assignment.php';
                     };
                 } else {
-                    btn.disabled = false;
+                    btn.disabled  = false;
                     btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Generate ID';
                     showResult(false, 'Error', data.message);
-                    resultClose.onclick = function() {
-                        resultModal.classList.remove('active');
-                    };
+                    resultClose.onclick = function() { resultModal.classList.remove('active'); };
                 }
             })
             .catch(function() {
-                btn.disabled = false;
+                btn.disabled  = false;
                 btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Generate ID';
-                showResult(false, 'Request Failed', 'Could not reach the server. Check your connection.');
+                showResult(false, 'Request Failed', 'Could not reach the server.');
                 resultClose.onclick = function() { resultModal.classList.remove('active'); };
             });
     });
 
-    resultClose.addEventListener('click', function() {
-        resultModal.classList.remove('active');
-    });
+    resultClose.addEventListener('click', function() { resultModal.classList.remove('active'); });
     resultModal.addEventListener('click', function(e) {
         if (e.target === resultModal) resultModal.classList.remove('active');
     });
@@ -323,7 +381,8 @@ if ($res2) while ($r = $res2->fetch_assoc()) $enrolled[] = $r;
     document.querySelectorAll('.btn-gen-id').forEach(function(btn) {
         btn.addEventListener('click', function() {
             showConfirm(
-                'Generate a student ID number for ' + btn.getAttribute('data-name') + '?',
+                'Generate a student ID for ' + btn.getAttribute('data-name') + '? ' +
+                'Section assignment will be done in the next step.',
                 btn
             );
         });

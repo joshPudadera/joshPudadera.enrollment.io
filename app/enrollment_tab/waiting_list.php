@@ -50,10 +50,14 @@ $page_h = min($page_h, $history_pages);
 $active_sql = "SELECT w.id AS wl_id, w.queue_position, w.reason, w.status AS wl_status, w.queued_at,
                        w.pre_reg_id, w.course, w.year_level,
                        p.first_name, p.last_name, p.ref_number,
-                       e.id AS enrollment_id, e.id_number, e.section, e.grade_confirmed
+                       p.grade_confirmed,
+                       p.cross_status,
+                       e.id AS enrollment_id, e.id_number, e.section,
+                       s.section AS student_section
                 FROM waiting_list w
                 JOIN pre_registrations p ON w.pre_reg_id = p.id
                 LEFT JOIN enrollments e ON e.pre_reg_id = w.pre_reg_id
+                LEFT JOIN students s ON s.pre_reg_id = w.pre_reg_id
                 WHERE w.status='Waiting' AND $base_where
                 ORDER BY w.queue_position ASC
                 LIMIT $rows_per_page OFFSET " . (($page_a - 1) * $rows_per_page);
@@ -61,7 +65,7 @@ $active_sql = "SELECT w.id AS wl_id, w.queue_position, w.reason, w.status AS wl_
 $history_sql = "SELECT w.id AS wl_id, w.queue_position, w.reason, w.status AS wl_status, w.queued_at,
                        w.pre_reg_id, w.course, w.year_level,
                        p.first_name, p.last_name, p.ref_number,
-                       e.id AS enrollment_id, e.id_number, e.section, e.grade_confirmed
+                       e.id AS enrollment_id, e.id_number, e.section
                 FROM waiting_list w
                 JOIN pre_registrations p ON w.pre_reg_id = p.id
                 LEFT JOIN enrollments e ON e.pre_reg_id = w.pre_reg_id
@@ -79,6 +83,18 @@ if ($res2) while ($r = $res2->fetch_assoc()) $history[] = $r;
 // Total waiting (unfiltered) for stat cards
 $waiting_total   = (int)$conn->query("SELECT COUNT(*) c FROM waiting_list WHERE status='Waiting'")->fetch_assoc()['c'];
 $promoted_total  = (int)$conn->query("SELECT COUNT(*) c FROM waiting_list WHERE status='Promoted'")->fetch_assoc()['c'];
+
+// Split active into cross-enrollment queue vs section queue
+$cross_queue   = [];
+$section_queue = [];
+foreach ($active as $q) {
+    $cs = $q['cross_status'] ?? 'Unchecked';
+    if ($cs === 'Flagged' || $cs === 'Unchecked') {
+        $cross_queue[] = $q;
+    } else {
+        $section_queue[] = $q;
+    }
+}
 
 // Sections for the promote dropdown
 $sections  = [];
@@ -113,6 +129,7 @@ if ($rs) while ($r = $rs->fetch_assoc()) $sections[] = $r;
       <h2 class="page-title"><i class="fa-solid fa-list-ol"></i> Waiting List Queue</h2>
     </div>
 
+    <!-- Pipeline step indicator -->
     <!-- Filter bar -->
     <form method="GET" style="margin:0 24px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
       <div class="search-wrap" style="flex:1;min-width:200px;max-width:300px;">
@@ -142,22 +159,95 @@ if ($rs) while ($r = $rs->fetch_assoc()) $sections[] = $r;
       <?php endif; ?>
     </form>
 
-    <!-- Active queue -->
+    <!-- ── Table 1: Waiting for Cross-Enrollment clearance ─────── -->
+    <?php $cq_count = count($cross_queue); ?>
     <div class="crud-card">
-      <div class="crud-header">
-        <h3>Active Queue
-          <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;">
-            <?= $active_count ?> student<?= $active_count!==1?'s':'' ?><?= ($search||$filter_course||$filter_yr)?' (filtered)':'' ?>
-          </span>
+      <div class="crud-header" style="align-items:center;">
+        <h3>
+          <i class="fa-solid fa-arrow-right-arrow-left" style="color:#d97706;margin-right:6px;"></i>
+          Waiting for Cross-Enrollment
+          <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;"><?= $cq_count ?> student<?= $cq_count!==1?'s':'' ?></span>
         </h3>
-        <?php if ($waiting_total > 0): ?>
-        <a href="section_assignment.php" class="btn-add">
-          <i class="fa-solid fa-wand-magic-sparkles"></i> Go to Section Assignment
+        <a href="cross_enrollment.php"
+           style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;
+                  font-size:.8rem;font-weight:700;color:#d97706;
+                  background:#fff7ed;border:1.5px solid #fcd34d;border-radius:8px;padding:6px 12px;">
+          Go to Cross Enrollment <i class="fa-solid fa-arrow-right"></i>
         </a>
-        <?php endif; ?>
       </div>
+      <?php if ($cross_queue): ?>
+      <table class="crud-table">
+        <thead><tr>
+          <th style="width:42px;">#</th>
+          <th>Name</th>
+          <th>Course</th>
+          <th>Year Level</th>
+          <th>Status</th>
+          <th>Reason</th>
+          <th>Queued</th>
+          <th style="text-align:center;">Actions</th>
+        </tr></thead>
+        <tbody>
+          <?php foreach ($cross_queue as $q):
+            $cs = $q['cross_status'] ?? 'Unchecked';
+          ?>
+          <tr id="wl-row-<?= $q['wl_id'] ?>">
+            <td><strong style="color:#2563eb;"><?= $q['queue_position'] ?></strong></td>
+            <td><?= htmlspecialchars($q['first_name'] . ' ' . $q['last_name']) ?></td>
+            <td style="font-size:.75rem;"><?= htmlspecialchars(preg_replace('/Bachelor of Science in /i','BS ',$q['course'])) ?></td>
+            <td><?= htmlspecialchars($q['year_level']) ?></td>
+            <td>
+              <?php if ($cs === 'Flagged'): ?>
+              <span style="font-size:.72rem;color:#dc2626;font-weight:600;">
+                <i class="fa-solid fa-lock"></i> Flagged — blocked
+              </span>
+              <?php else: ?>
+              <span style="font-size:.72rem;color:#d97706;font-weight:600;">
+                <i class="fa-solid fa-triangle-exclamation"></i> Needs review
+              </span>
+              <?php endif; ?>
+            </td>
+            <td style="font-size:.75rem;color:#888;"><?= htmlspecialchars($q['reason']) ?></td>
+            <td style="font-size:.75rem;color:#aaa;"><?= date('M d, Y', strtotime($q['queued_at'])) ?></td>
+            <td style="text-align:center;">
+              <button class="btn-cancel-wl"
+                      data-wl-id="<?= $q['wl_id'] ?>"
+                      data-name="<?= htmlspecialchars($q['first_name'] . ' ' . $q['last_name']) ?>"
+                      style="background:#fee2e2;color:#dc2626;border:1.5px solid #fca5a5;
+                             border-radius:7px;padding:5px 10px;font-size:.72rem;font-weight:600;
+                             cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
+                <i class="fa-solid fa-xmark"></i> Cancel
+              </button>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php else: ?>
+      <div style="padding:24px;text-align:center;color:#16a34a;font-size:.85rem;">
+        <i class="fa-solid fa-circle-check" style="margin-right:4px;"></i>
+        No students waiting for cross-enrollment review.
+      </div>
+      <?php endif; ?>
+    </div>
 
-      <?php if ($active): ?>
+    <!-- ── Table 2: Waiting for Section Assignment ───────────── -->
+    <?php $sq_count = count($section_queue); ?>
+    <div class="crud-card">
+      <div class="crud-header" style="align-items:center;">
+        <h3>
+          <i class="fa-solid fa-chalkboard" style="color:#2563eb;margin-right:6px;"></i>
+          Waiting for Section Assignment
+          <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:6px;"><?= $sq_count ?> student<?= $sq_count!==1?'s':'' ?></span>
+        </h3>
+        <a href="section_assignment.php"
+           style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;
+                  font-size:.8rem;font-weight:700;color:#2563eb;
+                  background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:8px;padding:6px 12px;">
+          Go to Section Assignment <i class="fa-solid fa-arrow-right"></i>
+        </a>
+      </div>
+      <?php if ($section_queue): ?>
       <table class="crud-table">
         <thead><tr>
           <th style="width:42px;">#</th>
@@ -165,19 +255,17 @@ if ($rs) while ($r = $rs->fetch_assoc()) $sections[] = $r;
           <th>Course</th>
           <th>Year Level</th>
           <th>ID Number</th>
-          <th>Step Reached</th>
+          <th>Status</th>
           <th>Reason</th>
           <th>Queued</th>
           <th style="text-align:center;">Actions</th>
         </tr></thead>
         <tbody>
-          <?php foreach ($active as $q): ?>
+          <?php foreach ($section_queue as $q): ?>
           <tr id="wl-row-<?= $q['wl_id'] ?>">
             <td><strong style="color:#2563eb;"><?= $q['queue_position'] ?></strong></td>
             <td><?= htmlspecialchars($q['first_name'] . ' ' . $q['last_name']) ?></td>
-            <td style="font-size:.75rem;">
-              <?= htmlspecialchars(preg_replace('/Bachelor of Science in /i', 'BS ', $q['course'])) ?>
-            </td>
+            <td style="font-size:.75rem;"><?= htmlspecialchars(preg_replace('/Bachelor of Science in /i','BS ',$q['course'])) ?></td>
             <td><?= htmlspecialchars($q['year_level']) ?></td>
             <td>
               <?php if ($q['id_number']): ?>
@@ -189,11 +277,7 @@ if ($rs) while ($r = $rs->fetch_assoc()) $sections[] = $r;
               <?php endif; ?>
             </td>
             <td>
-              <?php if (!$q['enrollment_id']): ?>
-              <span style="font-size:.72rem;color:#ef4444;font-weight:600;">
-                <i class="fa-solid fa-xmark"></i> ID not generated
-              </span>
-              <?php elseif (!$q['grade_confirmed']): ?>
+              <?php if (!$q['grade_confirmed']): ?>
               <span style="font-size:.72rem;color:#f59e0b;font-weight:600;">
                 <i class="fa-solid fa-clock"></i> Grade pending
               </span>
@@ -207,7 +291,7 @@ if ($rs) while ($r = $rs->fetch_assoc()) $sections[] = $r;
             <td style="font-size:.75rem;color:#aaa;"><?= date('M d, Y', strtotime($q['queued_at'])) ?></td>
             <td style="text-align:center;">
               <div style="display:inline-flex;gap:6px;flex-wrap:wrap;justify-content:center;">
-                <?php if ($q['grade_confirmed'] && $q['enrollment_id']): ?>
+                <?php if ($q['grade_confirmed']): ?>
                 <button class="btn-promote"
                         data-wl-id="<?= $q['wl_id'] ?>"
                         data-course="<?= htmlspecialchars($q['course']) ?>"
@@ -247,13 +331,9 @@ if ($rs) while ($r = $rs->fetch_assoc()) $sections[] = $r;
       </div>
       <?php endif; ?>
       <?php else: ?>
-      <div style="padding:32px;text-align:center;color:#aaa;font-size:.88rem;">
-        <i class="fa-solid fa-circle-check" style="font-size:1.6rem;color:#16a34a;display:block;margin-bottom:10px;"></i>
-        <?php if ($search||$filter_course||$filter_yr): ?>
-          No active queue entries match the current filters.
-        <?php else: ?>
-          Waiting list is empty — all students have been assigned to a section.
-        <?php endif; ?>
+      <div style="padding:24px;text-align:center;color:#16a34a;font-size:.85rem;">
+        <i class="fa-solid fa-circle-check" style="margin-right:4px;"></i>
+        No students waiting for section assignment.
       </div>
       <?php endif; ?>
     </div>

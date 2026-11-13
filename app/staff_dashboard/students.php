@@ -184,15 +184,7 @@ function pipeline_badge(array $row): string {
       <h2 class="page-title"><i class="fa-solid fa-user-graduate"></i> Students</h2>
     </div>
 
-    <div style="margin:0 24px 16px;background:#eff6ff;border:1.5px solid #bfdbfe;
-                border-radius:10px;padding:12px 16px;font-size:.82rem;color:#1e40af;
-                display:flex;align-items:center;gap:10px;">
-      <i class="fa-solid fa-circle-info" style="font-size:1rem;flex-shrink:0;"></i>
-      <span>
-        This list only shows students whose applications have been
-        <strong>Approved or Enrolled</strong> through the validation process.
-      </span>
-    </div>
+    
 
     <form method="get" action="students.php"
           style="display:flex;gap:10px;flex-wrap:wrap;margin:0 24px 14px;align-items:center;">

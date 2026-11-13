@@ -70,7 +70,7 @@ case 'login':
         respond(false, 'Username and password are required.');
 
     $stmt = $conn->prepare(
-        'SELECT id, username, email, first_name, last_name, password_hash, role
+        'SELECT id, username, email, first_name, last_name, password_hash, role, must_change_password
          FROM users WHERE username = ? LIMIT 1'
     );
     $stmt->bind_param('s', $username);
@@ -81,8 +81,24 @@ case 'login':
     if (!$user || !password_verify($password, $user['password_hash']))
         respond(false, 'Invalid username or password.');
 
-    // MFA for admin and staff
-    if (in_array($user['role'], ['admin', 'staff'])) {
+    // MFA for admin and staff — can be disabled via MFA_ENABLED=false in .env
+    $mfa_enabled = true;
+    $_env_mfa = __DIR__ . '/../.env';
+    if (file_exists($_env_mfa)) {
+        foreach (file($_env_mfa, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $_ln) {
+            $_ln = trim($_ln);
+            if (str_starts_with($_ln, 'MFA_ENABLED=')) {
+                $mfa_enabled = strtolower(trim(substr($_ln, 12))) !== 'false';
+                break;
+            }
+        }
+    }
+    // Server env var takes precedence
+    if (getenv('MFA_ENABLED') !== false) {
+        $mfa_enabled = strtolower(trim(getenv('MFA_ENABLED'))) !== 'false';
+    }
+
+    if ($mfa_enabled && in_array($user['role'], ['admin', 'staff'])) {
         $mfa_code    = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         $mfa_expires = time() + 300;
 
@@ -149,6 +165,11 @@ case 'login':
     $_SESSION['first_name'] = $user['first_name'];
     $_SESSION['last_name']  = $user['last_name'];
     $_SESSION['role']       = $user['role'];
+
+    // Force password change on first login (temp password was issued on account creation)
+    if (!empty($user['must_change_password'])) {
+        $_SESSION['must_set_password'] = true;
+    }
 
     respond(true, 'Login successful.', ['role' => $user['role']]);
 

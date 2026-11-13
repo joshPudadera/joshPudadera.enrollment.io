@@ -10,6 +10,55 @@ $ACTIVE_NAV = 'users';
 $PAGE_TITLE = 'Users & Permissions';
 $PAGE_ICON  = 'fa-solid fa-shield-halved';
 
+// ── Handle Add Staff POST ─────────────────────────────────────
+$add_success = '';
+$add_error   = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_staff') {
+    $first_name = trim($_POST['first_name'] ?? '');
+    $last_name  = trim($_POST['last_name']  ?? '');
+    $email      = trim($_POST['email']      ?? '');
+    $username   = trim($_POST['username']   ?? '');
+    $password   = trim($_POST['password']   ?? '');
+
+    if (!$first_name || !$last_name || !$email || !$username || !$password) {
+        $add_error = 'All fields are required.';
+    } else {
+        $chk = $conn->prepare('SELECT id FROM users WHERE username = ? OR email = ? LIMIT 1');
+        $chk->bind_param('ss', $username, $email);
+        $chk->execute();
+        if ($chk->get_result()->num_rows > 0) {
+            $add_error = 'Username or email already exists.';
+        } else {
+            $hash = password_hash($password, PASSWORD_DEFAULT);
+            $role = 'staff';
+            $stmt = $conn->prepare(
+                "INSERT INTO users (username, email, first_name, last_name, password_hash, role, must_change_password)
+                 VALUES (?,?,?,?,?,?,'1')"
+            );
+            $stmt->bind_param('ssssss', $username, $email, $first_name, $last_name, $hash, $role);
+            if ($stmt->execute()) {
+                $add_success = "Staff account created for $first_name $last_name. Username: $username. They must change their password on first login.";
+            } else {
+                $add_error = 'Failed to create account: ' . $conn->error;
+            }
+            $stmt->close();
+        }
+        $chk->close();
+    }
+
+    // Redirect with result so modal reopens and shows the message
+    if ($add_success) {
+        header('Location: permissions.php?action=add&ok=' . urlencode($add_success));
+    } else {
+        header('Location: permissions.php?action=add&err=' . urlencode($add_error));
+    }
+    exit;
+}
+
+// Read redirect messages
+if (isset($_GET['ok']))  $add_success = $_GET['ok'];
+if (isset($_GET['err'])) $add_error   = $_GET['err'];
+
 // Filters & pagination
 $search        = trim($_GET['q'] ?? '');
 $rows_per_page = 10;
@@ -70,9 +119,9 @@ ob_start();
         <?= $total_users ?><?= $search?' (filtered)':'' ?>
       </span>
     </h3>
-    <a href="../auth/register.php" class="btn-add">
+    <button type="button" id="btnAddUser" class="btn-add">
       <i class="fa-solid fa-plus"></i> Add User
-    </a>
+    </button>
   </div>
 
   <!-- Search bar -->
@@ -173,6 +222,85 @@ ob_start();
   <?php endif; ?>
 </div>
 
+<!-- ── Add User Modal ── -->
+<div class="modal-overlay" id="addUserModal">
+  <div class="modal">
+    <form method="POST" id="addStaffForm">
+      <input type="hidden" name="action" value="add_staff"/>
+      <div class="modal-header">
+        <span><i class="fa-solid fa-user-tie" style="color:#7c3aed;margin-right:6px;"></i> Add Staff Member</span>
+        <button type="button" class="modal-close" data-close="addUserModal">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:24px 22px;">
+        <?php if ($add_success): ?>
+        <div style="background:#dcfce7;border:1px solid #86efac;border-radius:8px;padding:12px 14px;
+                    font-size:.82rem;color:#16a34a;margin-bottom:16px;">
+          <i class="fa-solid fa-circle-check"></i> <?= htmlspecialchars($add_success) ?>
+        </div>
+        <?php endif; ?>
+        <?php if ($add_error): ?>
+        <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:12px 14px;
+                    font-size:.82rem;color:#dc2626;margin-bottom:16px;">
+          <i class="fa-solid fa-circle-xmark"></i> <?= htmlspecialchars($add_error) ?>
+        </div>
+        <?php endif; ?>
+        <p style="font-size:.82rem;color:#6b7280;margin-bottom:18px;">
+          Create a new staff account. The staff member will be prompted to change their password on first login.
+        </p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;">
+          <div>
+            <label style="display:block;font-size:.78rem;font-weight:600;color:#444;margin-bottom:5px;">
+              First Name <span style="color:#ef4444;">*</span>
+            </label>
+            <input type="text" name="first_name" required placeholder="Juan"
+                   style="width:100%;height:42px;border:1.5px solid #d0d7e2;border-radius:8px;
+                          padding:0 14px;font-size:.88rem;outline:none;font-family:inherit;box-sizing:border-box;"/>
+          </div>
+          <div>
+            <label style="display:block;font-size:.78rem;font-weight:600;color:#444;margin-bottom:5px;">
+              Last Name <span style="color:#ef4444;">*</span>
+            </label>
+            <input type="text" name="last_name" required placeholder="Dela Cruz"
+                   style="width:100%;height:42px;border:1.5px solid #d0d7e2;border-radius:8px;
+                          padding:0 14px;font-size:.88rem;outline:none;font-family:inherit;box-sizing:border-box;"/>
+          </div>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="display:block;font-size:.78rem;font-weight:600;color:#444;margin-bottom:5px;">
+            Email <span style="color:#ef4444;">*</span>
+          </label>
+          <input type="email" name="email" required placeholder="juan.delacruz@bcp.edu.ph"
+                 style="width:100%;height:42px;border:1.5px solid #d0d7e2;border-radius:8px;
+                        padding:0 14px;font-size:.88rem;outline:none;font-family:inherit;box-sizing:border-box;"/>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="display:block;font-size:.78rem;font-weight:600;color:#444;margin-bottom:5px;">
+            Username <span style="color:#ef4444;">*</span>
+          </label>
+          <input type="text" name="username" required placeholder="jdelacruz"
+                 style="width:100%;height:42px;border:1.5px solid #d0d7e2;border-radius:8px;
+                        padding:0 14px;font-size:.88rem;outline:none;font-family:inherit;box-sizing:border-box;"/>
+        </div>
+        <div style="margin-bottom:20px;">
+          <label style="display:block;font-size:.78rem;font-weight:600;color:#444;margin-bottom:5px;">
+            Temporary Password <span style="color:#ef4444;">*</span>
+          </label>
+          <input type="text" name="password" required placeholder="Staff123"
+                 style="width:100%;height:42px;border:1.5px solid #d0d7e2;border-radius:8px;
+                        padding:0 14px;font-size:.88rem;font-family:monospace;outline:none;box-sizing:border-box;"/>
+          <span style="font-size:.7rem;color:#aaa;">The staff member must change this on first login.</span>
+        </div>
+      </div>
+      <div class="modal-footer modal-footer-split">
+        <button type="button" class="btn-modal-cancel" data-close="addUserModal">Cancel</button>
+        <button type="submit" class="btn-modal-submit">
+          <i class="fa-solid fa-user-plus"></i> Create Staff Account
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- ── Reset Password Link Modal ── -->
 <div class="modal-overlay" id="resetLinkModal">
   <div class="modal modal-lg">
@@ -253,6 +381,19 @@ ob_start();
 
 <script>
 (function () {
+  // ── Add User modal ───────────────────────────────────────────
+  var btnAddUser = document.getElementById('btnAddUser');
+  if (btnAddUser) {
+    btnAddUser.addEventListener('click', function () {
+      openModal('addUserModal');
+    });
+  }
+
+  // Auto-open Add User modal if ?action=add in URL
+  if (new URLSearchParams(window.location.search).get('action') === 'add') {
+    setTimeout(function () { openModal('addUserModal'); }, 100);
+  }
+
   // ── Reset password link generation ──────────────────────────
   document.querySelectorAll('.btn-reset-pw').forEach(function (btn) {
     btn.addEventListener('click', function () {

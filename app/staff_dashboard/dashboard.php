@@ -64,13 +64,7 @@ if ($r && $r->num_rows > 0) {
       <h2 class="page-title"><i class="fa-solid fa-gauge"></i> Staff Dashboard</h2>
     </div>
 
-    <!-- Read-only notice -->
-    <div style="margin:0 24px 18px;background:#fffbeb;border:1.5px solid #fcd34d;
-                border-radius:10px;padding:10px 16px;font-size:.82rem;color:#92400e;
-                display:flex;align-items:center;gap:10px;">
-      <i class="fa-solid fa-shield-halved" style="flex-shrink:0;"></i>
-      You are logged in as <strong>Staff</strong>. You can view and approve data but cannot add or delete records.
-    </div>
+    
 
     <!-- Stat cards -->
     <div class="info-row">

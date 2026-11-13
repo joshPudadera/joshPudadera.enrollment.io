@@ -28,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $hash   = password_hash($new, PASSWORD_DEFAULT);
         $userId = (int)$_SESSION['user_id'];
-        $stmt   = $conn->prepare('UPDATE users SET password_hash=? WHERE id=?');
+        $stmt   = $conn->prepare('UPDATE users SET password_hash=?, must_change_password=0 WHERE id=?');
         $stmt->bind_param('si', $hash, $userId);
         if ($stmt->execute()) {
             unset($_SESSION['must_set_password']);

@@ -11,33 +11,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'auto_
     $assigned = 0;
     $created  = 0;
 
-    // Get all unassigned enrolled students — grade_confirmed=1 only
+    // ── Ensure columns exist ─────────────────────────────────
+    @$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS grade_confirmed TINYINT(1) NOT NULL DEFAULT 0");
+    @$conn->query("ALTER TABLE pre_registrations ADD COLUMN IF NOT EXISTS confirmed_year_level VARCHAR(50) DEFAULT NULL");
+
+    // Gate: student has an enrollment row (ID generated at Step 6) but no section yet
     $unassigned_q = $conn->query(
-        "SELECT e.id, e.course, e.year_level, e.pre_reg_id, p.first_name, p.last_name
+        "SELECT e.id AS enrollment_id,
+                e.pre_reg_id,
+                e.course,
+                COALESCE(e.year_level, p.year_level) AS year_level,
+                p.first_name, p.last_name
          FROM enrollments e
-         JOIN pre_registrations p ON e.pre_reg_id = p.id
+         JOIN pre_registrations p ON p.id = e.pre_reg_id
          WHERE (e.section IS NULL OR e.section = '' OR e.section = 'TBA')
-           AND e.grade_confirmed = 1
          ORDER BY e.course ASC, e.year_level ASC, p.last_name ASC"
     );
     $to_assign = [];
     if ($unassigned_q) while ($r = $unassigned_q->fetch_assoc()) $to_assign[] = $r;
 
     foreach ($to_assign as $student) {
-        $course    = $student['course'];
-        $year_lv   = $student['year_level'];
-        $enroll_id = $student['id'];
+        $course          = $student['course'];
+        $year_lv         = $student['year_level'];
+        $pre_reg_id_here = (int)$student['pre_reg_id'];
+        $enrollment_id   = (int)$student['enrollment_id'];
 
-        // Find sections for this course+year that are not full (count actual students)
+        // Find a section with space (count from enrollments — source of truth after Step 6)
         $free = $conn->query(
             "SELECT s.section_code,
-                    COUNT(e2.id) AS actual_count
+                    (SELECT COUNT(*) FROM enrollments en WHERE en.section = s.section_code) AS actual_count
              FROM sections s
-             LEFT JOIN enrollments e2 ON e2.section = s.section_code
              WHERE s.course = '" . $conn->real_escape_string($course) . "'
                AND s.year_level = '" . $conn->real_escape_string($year_lv) . "'
                AND s.is_active = 1
-             GROUP BY s.section_code, s.max_capacity
              HAVING actual_count < 50
              ORDER BY actual_count ASC
              LIMIT 1"
@@ -47,43 +53,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'auto_
         if ($free && $free->num_rows > 0) {
             $target_section = $free->fetch_assoc()['section_code'];
         } else {
-            // All sections full OR no section exists — create a new one
-            // Build next section code: derive prefix from course
-            // Strip anything in parentheses first, then build acronym from significant words
-            $course_clean = preg_replace('/\(.*?\)/', '', $course); // remove (...) blocks
-            $course_clean = preg_replace('/[^A-Za-z\s]/', '', $course_clean); // keep only letters+spaces
-            $words   = preg_split('/\s+/', trim($course_clean));
-            $prefix  = '';
-            $skip_words = ['of','in','and','the','major','a','an'];
-            foreach ($words as $w) {
-                $wl = strtolower($w);
-                if (strlen($w) > 2 && !in_array($wl, $skip_words)) {
-                    $prefix .= strtoupper($w[0]);
-                }
-            }
-            // For very short course codes (e.g. "STEM", "ABM") use the word directly
-            if (strlen($prefix) <= 2) {
-                $prefix = strtoupper(preg_replace('/[^A-Za-z]/', '', $words[0]));
-            }
-            $prefix = strtoupper($prefix ?: 'SEC') . '-' . substr($year_lv, 0, 1);
+            // All sections full OR none exists — create a new one using new naming scheme
+            // Format: [year_digit][sem_digit][seq_3digits]  e.g. 11038
+            $year_digits = ['1st Year'=>1,'2nd Year'=>2,'3rd Year'=>3,'4th Year'=>4,
+                            'Grade 11'=>1,'Grade 12'=>2];
+            $yd = $year_digits[$year_lv] ?? 0;
+            $sd = 1; // 1st semester default
 
-            // Find next available letter
-            $letter = 'A';
+            // Find next unused sequence number globally
+            $next_seq = 1;
+            $max_res = $conn->query("SELECT MAX(CAST(section_code AS UNSIGNED)) AS mx FROM sections");
+            if ($max_res) {
+                $mx = (int)$max_res->fetch_assoc()['mx'];
+                $next_seq = ($mx % 1000) + 1;
+                if ($next_seq <= 0) $next_seq = 1;
+            }
+            // Ensure no collision
             while (true) {
-                $code_try = $prefix . $letter;
-                $exists   = $conn->query("SELECT id FROM sections WHERE section_code='" .
-                            $conn->real_escape_string($code_try) . "' LIMIT 1");
-                if ($exists && $exists->num_rows === 0) break;
-                $letter = chr(ord($letter) + 1);
-                if ($letter > 'Z') { $letter = 'A1'; break; } // safety
+                $try_code = $yd . $sd . str_pad($next_seq, 3, '0', STR_PAD_LEFT);
+                $ex = $conn->query("SELECT id FROM sections WHERE section_code='" .
+                                   $conn->real_escape_string($try_code) . "' LIMIT 1");
+                if ($ex && $ex->num_rows === 0) break;
+                $next_seq++;
             }
+            $new_code = $yd . $sd . str_pad($next_seq, 3, '0', STR_PAD_LEFT);
 
-            $new_code = $prefix . $letter;
+            $sem_val = '1st';
             $ins = $conn->prepare(
-                'INSERT INTO sections (section_code, course, year_level, max_capacity, current_count)
-                 VALUES (?,?,?,50,0)'
+                'INSERT INTO sections (section_code, course, year_level, semester, max_capacity, current_count)
+                 VALUES (?,?,?,?,50,0)'
             );
-            $ins->bind_param('sss', $new_code, $course, $year_lv);
+            $ins->bind_param('ssss', $new_code, $course, $year_lv, $sem_val);
             if ($ins->execute()) {
                 $target_section = $new_code;
                 $created++;
@@ -92,23 +92,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'auto_
         }
 
         if ($target_section) {
+            // Update enrollments.section (student already has ID from Step 6)
             $upd = $conn->prepare('UPDATE enrollments SET section=? WHERE id=?');
-            $upd->bind_param('si', $target_section, $enroll_id);
-            if ($upd->execute()) {
-                // Sync current_count
-                $conn->query("UPDATE sections SET current_count = (
-                    SELECT COUNT(*) FROM enrollments WHERE section = '" .
-                    $conn->real_escape_string($target_section) . "'
-                ) WHERE section_code = '" . $conn->real_escape_string($target_section) . "'");
-
+            $upd->bind_param('si', $target_section, $enrollment_id);
+            if ($upd->execute() && $upd->affected_rows > 0) {
                 // Sync students.section
-                $pre_reg_id_here = (int)$student['pre_reg_id'];
                 $sync = $conn->prepare('UPDATE students SET section=? WHERE pre_reg_id=?');
                 $sync->bind_param('si', $target_section, $pre_reg_id_here);
                 $sync->execute();
                 $sync->close();
 
-                // Mark waiting list entry as Promoted
+                // Sync sections.current_count
+                $conn->query("UPDATE sections SET current_count = (
+                    SELECT COUNT(*) FROM enrollments WHERE section = '" .
+                    $conn->real_escape_string($target_section) . "'
+                ) WHERE section_code = '" . $conn->real_escape_string($target_section) . "'");
+
+                // Mark waiting list entry as Promoted if present
                 $promoted = 'Promoted';
                 $wl_upd = $conn->prepare(
                     "UPDATE waiting_list SET status=? WHERE pre_reg_id=? AND status='Waiting'"
@@ -129,25 +129,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'auto_
 // ── Handle Add Section POST ───────────────────────────────────
 $add_msg = $add_err = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_section') {
-    $code     = trim($_POST['section_code']  ?? '');
-    $course   = trim($_POST['course']        ?? '');
-    $year_lv  = trim($_POST['year_level']    ?? '');
-    $adviser  = trim($_POST['adviser_name']  ?? '');
-    $capacity = max(1, (int)($_POST['max_capacity'] ?? 40));
+    $course   = trim($_POST['course']       ?? '');
+    $year_lv  = trim($_POST['year_level']   ?? '');
+    $semester = trim($_POST['semester']     ?? '1st');
+    $capacity = max(1, (int)($_POST['max_capacity'] ?? 50));
 
-    if (!$code || !$course || !$year_lv) {
-        $add_err = 'Section code, course, and year level are required.';
+    if (!$course || !$year_lv) {
+        $add_err = 'Course and year level are required.';
     } else {
+        // Auto-generate section code: [year_digit][sem_digit][seq_3digits]
+        $year_digits = ['1st Year'=>1,'2nd Year'=>2,'3rd Year'=>3,'4th Year'=>4,
+                        'Grade 11'=>1,'Grade 12'=>2];
+        $yd = $year_digits[$year_lv] ?? 0;
+        $sd = (strpos($semester, '2') !== false) ? 2 : 1;
+
+        $next_seq = 1;
+        $max_res = $conn->query("SELECT MAX(CAST(section_code AS UNSIGNED)) AS mx FROM sections");
+        if ($max_res) {
+            $mx = (int)$max_res->fetch_assoc()['mx'];
+            $next_seq = ($mx % 1000) + 1;
+            if ($next_seq <= 0) $next_seq = 1;
+        }
+        while (true) {
+            $try_code = $yd . $sd . str_pad($next_seq, 3, '0', STR_PAD_LEFT);
+            $ex = $conn->query("SELECT id FROM sections WHERE section_code='" .
+                               $conn->real_escape_string($try_code) . "' LIMIT 1");
+            if ($ex && $ex->num_rows === 0) break;
+            $next_seq++;
+        }
+        $code = $yd . $sd . str_pad($next_seq, 3, '0', STR_PAD_LEFT);
+
         $stmt = $conn->prepare(
-            'INSERT INTO sections (section_code, course, year_level, adviser_name, max_capacity)
+            'INSERT INTO sections (section_code, course, year_level, semester, max_capacity)
              VALUES (?,?,?,?,?)'
         );
-        $stmt->bind_param('ssssi', $code, $course, $year_lv, $adviser, $capacity);
+        $stmt->bind_param('ssssi', $code, $course, $year_lv, $semester, $capacity);
         if ($stmt->execute()) {
-            $add_msg = "Section $code created successfully.";
+            $add_msg = "Section <strong>$code</strong> created successfully.";
         } else {
             $add_err = $conn->errno == 1062
-                ? "Section code '$code' already exists."
+                ? "Section code '$code' already exists (collision — retry)."
                 : 'Could not create section: ' . $conn->error;
         }
         $stmt->close();
@@ -165,32 +186,18 @@ if ($search) {
                   OR s.adviser_name LIKE '%$esc%')";
 }
 
-// ── Sections with REAL student count ─────────────────────────
+// Sections — simple query avoids collation mismatch (Error 1267)
 $sections = [];
 $res = $conn->query(
-    "SELECT s.*,
-            (
-              SELECT COUNT(*) FROM enrollments e
-              WHERE e.section = s.section_code
-            ) +
-            (
-              SELECT COUNT(*) FROM students st
-              LEFT JOIN enrollments e2 ON e2.pre_reg_id = st.pre_reg_id
-              WHERE st.section = s.section_code
-                AND (e2.id IS NULL OR e2.section != st.section)
-            ) AS actual_count,
-            50 AS effective_cap
-     FROM sections s
-     $where
-     ORDER BY s.course ASC, s.year_level ASC, s.section_code ASC"
+    "SELECT * FROM sections WHERE is_active = 1
+     ORDER BY course ASC, year_level ASC, section_code ASC"
 );
 if ($res) while ($r = $res->fetch_assoc()) {
-    // Always use 50 as cap, update DB if different
-    if ($r['max_capacity'] != 50) {
-        $conn->query("UPDATE sections SET max_capacity=50 WHERE id={$r['id']}");
+    if ((int)$r['max_capacity'] !== 50) {
+        $conn->query("UPDATE sections SET max_capacity=50 WHERE id=" . (int)$r['id']);
         $r['max_capacity'] = 50;
     }
-    $r['current_count'] = (int)$r['actual_count']; // use real count
+    $r['current_count'] = 0;
     $sections[] = $r;
 }
 
@@ -211,8 +218,7 @@ $res3 = $conn->query(
      LEFT JOIN pre_registrations p ON e.pre_reg_id = p.id
      LEFT JOIN students s ON s.pre_reg_id = e.pre_reg_id
      WHERE e.section IS NOT NULL AND e.section != '' AND e.section != 'TBA'
-     ORDER BY e.section ASC, COALESCE(p.last_name, s.last_name) ASC"
-);
+     ORDER BY e.section ASC, COALESCE(p.last_name, s.last_name) ASC");
 if ($res3) {
     while ($r = $res3->fetch_assoc()) {
         $section_students[$r['section']][] = $r;
@@ -237,11 +243,10 @@ if ($res4) {
     }
 }
 
-// ── Get all unassigned students — GATED: grade_confirmed=1 or no enrollment ──
-// Merges enrollments without section + students table entries without section
+// ── Get all unassigned students — GATED: has enrollment row (ID generated) ──
 $unassigned = [];
 
-// From enrollments (pipeline students with grade confirmed)
+// Students with enrollment row but section still TBA/null (ID exists, section pending)
 $res_ua = $conn->query(
     "SELECT e.id, e.pre_reg_id, e.id_number, e.year_level, e.course,
             COALESCE(p.first_name, s.first_name, 'Unknown') AS first_name,
@@ -250,27 +255,31 @@ $res_ua = $conn->query(
      LEFT JOIN pre_registrations p ON e.pre_reg_id = p.id
      LEFT JOIN students s ON s.pre_reg_id = e.pre_reg_id
      WHERE (e.section IS NULL OR e.section = '' OR e.section = 'TBA')
-       AND e.grade_confirmed = 1
      ORDER BY COALESCE(p.last_name, s.last_name) ASC"
 );
 if ($res_ua) while ($r = $res_ua->fetch_assoc()) $unassigned[] = $r;
 
-// From students with no enrollment but section is TBA/empty
-$res_ub = $conn->query(
-    "SELECT NULL AS id, s.pre_reg_id, NULL AS id_number, s.year_level, s.course,
-            s.first_name, s.last_name
-     FROM students s
-     LEFT JOIN enrollments e ON e.pre_reg_id = s.pre_reg_id
-     WHERE e.id IS NULL
-       AND (s.section IS NULL OR s.section = '' OR s.section = 'TBA')
-     ORDER BY s.last_name ASC"
-);
-if ($res_ub) while ($r = $res_ub->fetch_assoc()) $unassigned[] = $r;
+// Backfill current_count on each section using enrollments (source of truth after Step 6)
+foreach ($sections as &$sec) {
+    $sc = $conn->real_escape_string($sec['section_code']);
+    $cnt = $conn->query("SELECT COUNT(*) c FROM enrollments WHERE section='$sc'")->fetch_assoc()['c'];
+    $sec['current_count'] = (int)$cnt;
+}
+unset($sec);
 
-// Count students still blocked (grade not confirmed)
+// Count students still blocked (grade not confirmed — from pre_registrations)
 $blocked_grade = 0;
-$bg = $conn->query("SELECT COUNT(*) c FROM enrollments WHERE grade_confirmed = 0");
+$bg = $conn->query("SELECT COUNT(*) c FROM pre_registrations WHERE status='Approved' AND grade_confirmed = 0 AND cross_status != 'Flagged'");
 if ($bg) $blocked_grade = (int)$bg->fetch_assoc()['c'];
+
+// Count students with grade confirmed but no ID yet (need to go through ID Generation first)
+$not_id_yet = 0;
+$ni = $conn->query(
+    "SELECT COUNT(*) c FROM pre_registrations p
+     LEFT JOIN enrollments e ON e.pre_reg_id = p.id
+     WHERE p.status = 'Approved' AND p.grade_confirmed = 1 AND e.id IS NULL"
+);
+if ($ni) $not_id_yet = (int)$ni->fetch_assoc()['c'];
 
 // All active sections for dropdowns
 $all_sections = [];
@@ -363,30 +372,6 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
       <h2 class="page-title"><i class="fa-solid fa-chalkboard"></i> Section Assignment</h2>
     </div>
 
-    <!-- Pipeline step indicator -->
-    <div style="margin:0 24px 18px;background:#eff6ff;border:1.5px solid #bfdbfe;
-                border-radius:10px;padding:12px 16px;font-size:.82rem;color:#1e40af;">
-      <i class="fa-solid fa-circle-info"></i>
-      <strong>Step 6 of 6</strong> — Assign students to sections manually or use
-      <strong>Auto-Assign All</strong> to let the system fill sections automatically.
-      Only students who have completed grade level confirmation appear in the queue.
-    </div>
-
-    <?php if ($blocked_grade > 0): ?>
-    <div style="margin:0 24px 16px;background:#fff7ed;border:1.5px solid #fcd34d;
-                border-radius:10px;padding:12px 16px;font-size:.82rem;color:#92400e;
-                display:flex;align-items:center;gap:10px;">
-      <i class="fa-solid fa-triangle-exclamation" style="flex-shrink:0;"></i>
-      <span>
-        <strong><?= $blocked_grade ?> student<?= $blocked_grade !== 1 ? 's' : '' ?></strong>
-        still need<?= $blocked_grade === 1 ? 's' : '' ?> grade level confirmation.
-        <a href="grade_assignment.php" style="color:#d97706;font-weight:700;">
-          Go to Grade Assignment →
-        </a>
-      </span>
-    </div>
-    <?php endif; ?>
-
     <?php if ($add_msg): ?>
     <div style="margin:0 24px 16px;background:#dcfce7;color:#16a34a;border:1px solid #86efac;
                 border-radius:8px;padding:12px 18px;font-size:.85rem;">
@@ -430,126 +415,12 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
       <?php endif; ?>
     </div>
 
-    <!-- Sections list -->
-    <div style="padding:0 24px;">
-      <?php if (empty($sections)): ?>
-      <div class="crud-card" style="text-align:center;padding:40px;color:#aaa;">
-        <i class="fa-solid fa-chalkboard" style="font-size:2rem;display:block;margin-bottom:12px;"></i>
-        No sections found<?= $search ? " matching \"$search\"" : '' ?>.
-      </div>
-      <?php endif; ?>
-
-      <?php
-      // Group by course
-      $by_course = [];
-      foreach ($sections as $sec) {
-          $by_course[$sec['course']][] = $sec;
-      }
-      foreach ($by_course as $course_name => $course_sections):
-        $short = preg_replace('/Bachelor of Science in /i','BS ',$course_name);
-      ?>
-      <div style="margin-bottom:24px;">
-        <h3 style="font-size:.88rem;font-weight:700;color:#1a3a8c;margin-bottom:10px;
-                   padding-bottom:6px;border-bottom:2px solid #eff6ff;">
-          <i class="fa-solid fa-graduation-cap" style="margin-right:6px;"></i>
-          <?= htmlspecialchars($short) ?>
-        </h3>
-
-        <?php foreach ($course_sections as $sec):
-          $pct   = $sec['max_capacity'] > 0 ? round(($sec['current_count']/$sec['max_capacity'])*100) : 0;
-          $color = $pct >= 100 ? '#ef4444' : ($pct >= 80 ? '#f59e0b' : '#22c55e');
-          $studs = $section_students[$sec['section_code']] ?? [];
-        ?>
-        <div class="section-card">
-          <!-- Section header — click to toggle -->
-          <div class="section-card-header" onclick="toggleSection('sec-<?= htmlspecialchars($sec['section_code']) ?>')">
-            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-              <div>
-                <div style="font-size:.9rem;font-weight:700;color:#1a1a2e;">
-                  <?= htmlspecialchars($sec['section_code']) ?>
-                  <span style="font-size:.72rem;color:#aaa;font-weight:400;margin-left:6px;">
-                    <?= htmlspecialchars($sec['year_level']) ?>
-                  </span>
-                </div>
-                <?php if ($sec['adviser_name']): ?>
-                <div style="font-size:.72rem;color:#888;margin-top:2px;">
-                  <i class="fa-solid fa-chalkboard-user" style="margin-right:4px;"></i>
-                  <?= htmlspecialchars($sec['adviser_name']) ?>
-                </div>
-                <?php endif; ?>
-              </div>
-              <div style="display:flex;align-items:center;gap:8px;min-width:160px;">
-                <div class="capacity-bar">
-                  <div class="capacity-fill"
-                       style="width:<?= min($pct,100) ?>%;background:<?= $color ?>;"></div>
-                </div>
-                <span style="font-size:.75rem;font-weight:700;color:<?= $color ?>;white-space:nowrap;">
-                  <?= $sec['current_count'] ?>/<?= $sec['max_capacity'] ?>
-                </span>
-              </div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span style="font-size:.75rem;color:#aaa;">
-                <?= count($studs) ?> student<?= count($studs)!=1?'s':'' ?>
-              </span>
-              <i class="fa-solid fa-chevron-down"
-                 style="color:#aaa;transition:transform .2s;"
-                 id="arrow-sec-<?= htmlspecialchars($sec['section_code']) ?>"></i>
-            </div>
-          </div>
-
-          <!-- Section body — students table -->
-          <div class="section-card-body" id="sec-<?= htmlspecialchars($sec['section_code']) ?>">
-            <?php if (empty($studs)): ?>
-            <div style="padding:20px;text-align:center;color:#aaa;font-size:.82rem;">
-              <i class="fa-solid fa-user-slash" style="margin-right:6px;"></i>
-              No students assigned to this section yet.
-            </div>
-            <?php else: ?>
-            <table style="width:100%;border-collapse:collapse;font-size:.8rem;">
-              <thead>
-                <tr style="background:#f8fafc;border-bottom:1px solid #f0f2f5;">
-                  <th style="padding:10px 16px;text-align:left;color:#555;font-weight:600;font-size:.72rem;text-transform:uppercase;">#</th>
-                  <th style="padding:10px 16px;text-align:left;color:#555;font-weight:600;font-size:.72rem;text-transform:uppercase;">Name</th>
-                  <th style="padding:10px 16px;text-align:left;color:#555;font-weight:600;font-size:.72rem;text-transform:uppercase;">Year Level</th>
-                  <th style="padding:10px 16px;text-align:left;color:#555;font-weight:600;font-size:.72rem;text-transform:uppercase;">ID Number</th>
-                  <th style="padding:10px 16px;text-align:left;color:#555;font-weight:600;font-size:.72rem;text-transform:uppercase;">Enrolled</th>
-                </tr>
-              </thead>
-              <tbody>
-                <?php foreach ($studs as $i => $st): ?>
-                <tr style="border-bottom:1px solid #f9fafb;">
-                  <td style="padding:10px 16px;color:#aaa;"><?= $i+1 ?></td>
-                  <td style="padding:10px 16px;font-weight:600;color:#1a1a2e;">
-                    <?= htmlspecialchars(($st['first_name'] ?? '').' '.($st['last_name'] ?? '')) ?>
-                  </td>
-                  <td style="padding:10px 16px;color:#555;"><?= htmlspecialchars($st['year_level'] ?? '') ?></td>
-                  <td style="padding:10px 16px;">
-                    <code style="font-size:.75rem;background:#eff6ff;color:#2563eb;padding:2px 8px;border-radius:4px;">
-                      <?= htmlspecialchars($st['id_number'] ?? '—') ?>
-                    </code>
-                  </td>
-                  <td style="padding:10px 16px;font-size:.75rem;color:#888;">
-                    <?= $st['enrolled_at'] ? date('M d, Y', strtotime($st['enrolled_at'])) : '—' ?>
-                  </td>
-                </tr>
-                <?php endforeach; ?>
-              </tbody>
-            </table>
-            <?php endif; ?>
-          </div>
-        </div>
-        <?php endforeach; ?>
-      </div>
-      <?php endforeach; ?>
-    </div>
-
-    <!-- Unassigned students -->
+    <!-- ── Unassigned students (top, before sections) ────────── -->
     <?php if ($unassigned): ?>
-    <div class="crud-card" style="margin:0 24px 24px;">
+    <div class="crud-card" style="margin:0 24px 20px;">
       <div class="crud-header">
         <h3><i class="fa-solid fa-user-clock" style="color:#f59e0b;margin-right:6px;"></i>
-          Unassigned Students (<?= count($unassigned) ?>)
+          Unassigned Students <span style="font-size:.75rem;font-weight:400;color:#888;">(<?= count($unassigned) ?>)</span>
         </h3>
       </div>
       <table class="crud-table">
@@ -582,7 +453,7 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
                   </option>
                   <?php endforeach; ?>
                 </select>
-                <button class="btn-approve btn-assign-sec" data-id="<?= $e['id'] ?>">
+                <button class="btn-approve btn-assign-sec" data-id="<?= (int)$e['id'] ?>">
                   <i class="fa-solid fa-check"></i> Assign
                 </button>
               </div>
@@ -594,6 +465,212 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
     </div>
     <?php endif; ?>
 
+    <!-- ── Sections grouped by year level ────────────────────── -->
+    <div style="padding:0 24px;">
+      <?php if (empty($sections)): ?>
+      <div class="crud-card" style="text-align:center;padding:40px;color:#aaa;">
+        <i class="fa-solid fa-chalkboard" style="font-size:2rem;display:block;margin-bottom:12px;"></i>
+        No sections found<?= $search ? " matching \"$search\"" : '' ?>.
+      </div>
+      <?php endif; ?>
+
+      <?php
+      // ── Three-level grouping: Course → Year Level → Semester ──
+      $by_course = [];
+      foreach ($sections as $sec) {
+          $course_key = $sec['course'] ?: 'Unassigned Course';
+          $yl = $sec['year_level'] ?: 'Unassigned';
+          $sem = $sec['semester'] ?: '1st';
+          // Normalize semester display
+          if (strpos($sem, '2') !== false) $sem_key = '2nd';
+          else $sem_key = '1st';
+
+          $by_course[$course_key][$yl][$sem_key][] = $sec;
+      }
+
+      // Sort courses alphabetically
+      ksort($by_course);
+
+      $yl_order = ['1st Year'=>0,'2nd Year'=>1,'3rd Year'=>2,'4th Year'=>3,
+                   'Grade 11'=>4,'Grade 12'=>5,'Unassigned'=>99];
+
+      foreach ($by_course as $course_name => $course_years):
+        $short = preg_replace('/Bachelor of Science in /i','BS ',$course_name);
+        $course_id = 'crs-' . preg_replace('/[^a-z0-9]/i','_', $course_name);
+        $total_course = 0;
+        $cap_course = 0;
+        foreach ($course_years as $yl => $sems) {
+          foreach ($sems as $sem => $secs) {
+            foreach ($secs as $s) {
+              $total_course += $s['current_count'];
+              $cap_course += $s['max_capacity'];
+            }
+          }
+        }
+        $total_sections_course = 0;
+        foreach ($course_years as $sems) foreach ($sems as $secs) $total_sections_course += count($secs);
+      ?>
+      <div style="margin-bottom:24px;">
+        <!-- Course header (level 1) -->
+        <div onclick="toggleYearGroup('<?= $course_id ?>')"
+             style="display:flex;align-items:center;justify-content:space-between;
+                    padding:12px 16px;background:#1a3a8c;border-radius:10px;
+                    cursor:pointer;user-select:none;margin-bottom:4px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <i class="fa-solid fa-graduation-cap" style="color:#93c5fd;font-size:.9rem;"></i>
+            <span style="font-weight:700;color:#fff;font-size:.95rem;"><?= htmlspecialchars($short) ?></span>
+            <span style="background:rgba(255,255,255,.2);color:#e0f2fe;border-radius:20px;
+                         padding:1px 10px;font-size:.72rem;font-weight:600;">
+              <?= $total_sections_course ?> section<?= $total_sections_course!==1?'s':'' ?>
+            </span>
+            <span style="color:#93c5fd;font-size:.72rem;"><?= $total_course ?>/<?= $cap_course ?> enrolled</span>
+          </div>
+          <i class="fa-solid fa-chevron-down" id="arrow-<?= $course_id ?>"
+             style="color:#93c5fd;transition:transform .2s;"></i>
+        </div>
+
+        <!-- Course body (hidden by default) -->
+        <div id="<?= $course_id ?>" style="display:none;padding-left:8px;margin-top:4px;">
+
+          <?php
+          // Sort year levels within this course
+          uksort($course_years, fn($a,$b) => ($yl_order[$a]??50) <=> ($yl_order[$b]??50));
+
+          foreach ($course_years as $year_label => $sem_groups):
+            $year_id = $course_id . '-yr-' . preg_replace('/[^a-z0-9]/i','_', $year_label);
+            $total_yr = 0; $cap_yr = 0;
+            foreach ($sem_groups as $sem => $secs) {
+              foreach ($secs as $s) {
+                $total_yr += $s['current_count'];
+                $cap_yr += $s['max_capacity'];
+              }
+            }
+            $total_secs_yr = 0;
+            foreach ($sem_groups as $secs) $total_secs_yr += count($secs);
+          ?>
+          <div style="margin-bottom:16px;">
+            <!-- Year level header (level 2) -->
+            <div onclick="toggleYearGroup('<?= $year_id ?>')"
+                 style="display:flex;align-items:center;justify-content:space-between;
+                        padding:8px 14px;background:#3b82f6;border-radius:8px;
+                        cursor:pointer;user-select:none;margin-bottom:4px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <i class="fa-solid fa-layer-group" style="color:#dbeafe;font-size:.8rem;"></i>
+                <span style="font-weight:700;color:#fff;font-size:.85rem;"><?= htmlspecialchars($year_label) ?></span>
+                <span style="background:rgba(255,255,255,.2);color:#dbeafe;border-radius:20px;
+                             padding:1px 8px;font-size:.68rem;font-weight:600;">
+                  <?= $total_secs_yr ?> section<?= $total_secs_yr!==1?'s':'' ?>
+                </span>
+                <span style="color:#dbeafe;font-size:.68rem;"><?= $total_yr ?>/<?= $cap_yr ?> enrolled</span>
+              </div>
+              <i class="fa-solid fa-chevron-down" id="arrow-<?= $year_id ?>"
+                 style="color:#dbeafe;transition:transform .2s;font-size:.75rem;"></i>
+            </div>
+
+            <!-- Year body (hidden by default) -->
+            <div id="<?= $year_id ?>" style="display:none;padding-left:8px;margin-top:4px;">
+
+              <?php
+              // Sort semesters: 1st before 2nd
+              uksort($sem_groups, fn($a,$b) => strcmp($a,$b));
+
+              foreach ($sem_groups as $sem_key => $sem_sections):
+                $sem_label = $sem_key === '2nd' ? '2nd Semester' : '1st Semester';
+                $sem_id = $year_id . '-sem-' . $sem_key;
+                $total_sem = 0; $cap_sem = 0;
+                foreach ($sem_sections as $s) {
+                  $total_sem += $s['current_count'];
+                  $cap_sem += $s['max_capacity'];
+                }
+              ?>
+              <div style="margin-bottom:12px;">
+                <!-- Semester sub-header (level 3) — not collapsible, just a label -->
+                <div style="display:flex;align-items:center;gap:8px;
+                            padding:6px 10px;margin-bottom:6px;border-left:3px solid #93c5fd;
+                            background:#eff6ff;border-radius:0 6px 6px 0;">
+                  <i class="fa-solid fa-calendar-days" style="color:#3b82f6;font-size:.75rem;"></i>
+                  <span style="font-weight:600;color:#1e40af;font-size:.8rem;"><?= htmlspecialchars($sem_label) ?></span>
+                  <span style="color:#6b7280;font-size:.7rem;"><?= $total_sem ?>/<?= $cap_sem ?> enrolled</span>
+                </div>
+
+                <!-- Section cards under this semester -->
+                <?php foreach ($sem_sections as $sec):
+                  $pct   = $sec['max_capacity'] > 0 ? round(($sec['current_count']/$sec['max_capacity'])*100) : 0;
+                  $color = $pct >= 100 ? '#ef4444' : ($pct >= 80 ? '#f59e0b' : '#22c55e');
+                  $studs = $section_students[$sec['section_code']] ?? [];
+                  $sec_uid = 'sec-' . preg_replace('/[^a-z0-9]/i','_', $sec['section_code']);
+                ?>
+                <div class="section-card">
+                  <div class="section-card-header" onclick="toggleSection('<?= $sec_uid ?>')">
+                    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+                      <div>
+                        <div style="font-size:.88rem;font-weight:700;color:#1a1a2e;">
+                          <?= htmlspecialchars($sec['section_code']) ?>
+                        </div>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;min-width:140px;">
+                        <div class="capacity-bar">
+                          <div class="capacity-fill" style="width:<?= min($pct,100) ?>%;background:<?= $color ?>;"></div>
+                        </div>
+                        <span style="font-size:.75rem;font-weight:700;color:<?= $color ?>;white-space:nowrap;">
+                          <?= $sec['current_count'] ?>/<?= $sec['max_capacity'] ?>
+                        </span>
+                      </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <span style="font-size:.72rem;color:#aaa;"><?= count($studs) ?> student<?= count($studs)!=1?'s':'' ?></span>
+                      <i class="fa-solid fa-chevron-down" id="arrow-<?= $sec_uid ?>"
+                         style="color:#aaa;transition:transform .2s;font-size:.75rem;"></i>
+                    </div>
+                  </div>
+                  <div class="section-card-body" id="<?= $sec_uid ?>">
+                    <?php if (empty($studs)): ?>
+                    <div style="padding:18px;text-align:center;color:#aaa;font-size:.82rem;">
+                      <i class="fa-solid fa-user-slash" style="margin-right:4px;"></i>No students yet.
+                    </div>
+                    <?php else: ?>
+                    <table style="width:100%;border-collapse:collapse;font-size:.8rem;">
+                      <thead>
+                        <tr style="background:#f8fafc;border-bottom:1px solid #f0f2f5;">
+                          <th style="padding:8px 16px;text-align:left;color:#555;font-weight:600;font-size:.7rem;text-transform:uppercase;">#</th>
+                          <th style="padding:8px 16px;text-align:left;color:#555;font-weight:600;font-size:.7rem;text-transform:uppercase;">Name</th>
+                          <th style="padding:8px 16px;text-align:left;color:#555;font-weight:600;font-size:.7rem;text-transform:uppercase;">ID Number</th>
+                          <th style="padding:8px 16px;text-align:left;color:#555;font-weight:600;font-size:.7rem;text-transform:uppercase;">Enrolled</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <?php foreach ($studs as $i => $st): ?>
+                        <tr style="border-bottom:1px solid #f9fafb;">
+                          <td style="padding:9px 16px;color:#aaa;"><?= $i+1 ?></td>
+                          <td style="padding:9px 16px;font-weight:600;color:#1a1a2e;">
+                            <?= htmlspecialchars(($st['first_name'] ?? '').' '.($st['last_name'] ?? '')) ?>
+                          </td>
+                          <td style="padding:9px 16px;">
+                            <code style="font-size:.73rem;background:#eff6ff;color:#2563eb;padding:2px 8px;border-radius:4px;">
+                              <?= htmlspecialchars($st['id_number'] ?? '—') ?>
+                            </code>
+                          </td>
+                          <td style="padding:9px 16px;font-size:.73rem;color:#888;">
+                            <?= $st['enrolled_at'] ? date('M d, Y', strtotime($st['enrolled_at'])) : '—' ?>
+                          </td>
+                        </tr>
+                        <?php endforeach; ?>
+                      </tbody>
+                    </table>
+                    <?php endif; ?>
+                  </div>
+                </div>
+                <?php endforeach; ?>
+              </div><!-- end semester -->
+              <?php endforeach; ?>
+            </div><!-- end year body -->
+          </div><!-- end year group -->
+          <?php endforeach; ?>
+        </div><!-- end course body -->
+      </div><!-- end course group -->
+      <?php endforeach; ?>
+    </div>
+
   </div>
   <div class="footer">eLearning Commons &copy; 2026</div>
 </div>
@@ -602,18 +679,11 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
 <div class="modal-overlay" id="addSectionModal">
   <div class="modal-box">
     <h3><i class="fa-solid fa-plus" style="color:#16a34a;margin-right:8px;"></i>Add New Section</h3>
+    <p style="font-size:.78rem;color:#6b7280;margin-bottom:16px;margin-top:-8px;">
+      The section code is generated automatically based on year level and semester.
+    </p>
     <form method="POST">
       <input type="hidden" name="action" value="add_section"/>
-      <div class="mfield-row">
-        <div class="mfield">
-          <label>Section Code <span style="color:#ef4444;">*</span></label>
-          <input type="text" name="section_code" placeholder="e.g. BSIT-1B" required/>
-        </div>
-        <div class="mfield">
-          <label>Max Capacity</label>
-          <input type="number" name="max_capacity" value="40" min="1" max="200"/>
-        </div>
-      </div>
       <div class="mfield">
         <label>Course <span style="color:#ef4444;">*</span></label>
         <select name="course" required>
@@ -634,8 +704,16 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
           </select>
         </div>
         <div class="mfield">
-          <label>Adviser Name</label>
-          <input type="text" name="adviser_name" placeholder="Prof. Santos"/>
+          <label>Semester <span style="color:#ef4444;">*</span></label>
+          <select name="semester" required>
+            <option value="1st">1st Semester</option>
+            <option value="2nd">2nd Semester</option>
+          </select>
+        </div>
+      </div>
+      <div class="mfield">
+          <label>Max Capacity</label>
+          <input type="number" name="max_capacity" value="50" min="1" max="200"/>
         </div>
       </div>
       <div class="modal-actions">
@@ -665,10 +743,19 @@ $year_levels = ['1st Year','2nd Year','3rd Year','4th Year'];
 </div>
 
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
-<script src="../js/sidebar.js"></script>
 <script src="../js/dashboard.js"></script>
 <script>
 var ENROLL_API = '../shared/enrollment_actions.php';
+
+// ── Year group toggle ─────────────────────────────────────────
+function toggleYearGroup(id) {
+    var body  = document.getElementById(id);
+    var arrow = document.getElementById('arrow-' + id);
+    if (!body) return;
+    var open = body.style.display === 'block';
+    body.style.display = open ? 'none' : 'block';
+    if (arrow) arrow.style.transform = open ? '' : 'rotate(180deg)';
+}
 
 // ── Section card toggle ───────────────────────────────────────
 function toggleSection(id) {

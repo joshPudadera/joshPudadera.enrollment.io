@@ -96,6 +96,7 @@ $conn->close();
       <h2 class="page-title"><i class="fa-solid fa-clipboard-check"></i> Enrollment Validation</h2>
     </div>
 
+    <!-- Pipeline step indicator -->
     <div style="padding:0 24px;margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap;">
       <?php foreach (['Pending','Approved','Rejected','Enrolled'] as $s): ?>
       <a href="?status=<?= $s ?>&q=<?= urlencode($search) ?>&type=<?= urlencode($filter_type) ?>&course=<?= urlencode($filter_course) ?>" class="pg-btn<?= $filter===$s?' active':'' ?>"><?= $s ?></a>
@@ -273,7 +274,7 @@ $conn->close();
   </div>
 </div>
 
-<!-- LOGIN LINK MODAL -->
+<!-- CREDENTIALS MODAL (shown after approving an application) -->
 <div class="modal-overlay" id="loginLinkModal">
   <div class="modal">
     <div class="modal-header">
@@ -281,28 +282,61 @@ $conn->close();
       <button class="modal-close" data-close="loginLinkModal">&times;</button>
     </div>
     <div class="modal-body">
-      <!-- Email delivery status banner — filled by JS -->
-      <div id="emailStatusBanner" style="margin-bottom:14px;border-radius:8px;padding:10px 14px;font-size:.82rem;display:none;"></div>
 
-      <p style="font-size:.85rem;color:#555;margin-bottom:14px;">
-        Share this one-time login link with the student. It expires in <strong>72 hours</strong> and can only be used once.
+      <!-- Email delivery status banner — filled by JS -->
+      <div id="emailStatusBanner" style="margin-bottom:14px;border-radius:8px;
+           padding:10px 14px;font-size:.82rem;display:none;"></div>
+
+      <p style="font-size:.85rem;color:#555;margin-bottom:16px;">
+        The student's account has been created. Their login credentials are shown below.
+        They will be prompted to set a new password on first login.
       </p>
-      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px 16px;margin-bottom:14px;">
-        <div style="font-size:.7rem;color:#aaa;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">Student Login Link</div>
-        <a id="loginLinkUrl" href="#" target="_blank"
-           style="font-size:.78rem;color:#2563eb;word-break:break-all;text-decoration:underline;"></a>
+
+      <!-- Username row -->
+      <div style="background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:8px;
+                  padding:12px 16px;margin-bottom:10px;">
+        <div style="font-size:.68rem;color:#6b7280;text-transform:uppercase;
+                    letter-spacing:.06em;margin-bottom:5px;">Username</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <code id="loginLinkUsername"
+                style="flex:1;font-size:.92rem;font-weight:700;color:#1a3a8c;
+                       word-break:break-all;"></code>
+          <button id="btnCopyUsername" onclick="copyCredential('loginLinkUsername','btnCopyUsername')"
+                  style="background:#2563eb;color:#fff;border:none;border-radius:6px;
+                         padding:5px 12px;font-size:.75rem;font-weight:600;cursor:pointer;
+                         font-family:inherit;white-space:nowrap;flex-shrink:0;">
+            <i class="fa-solid fa-copy"></i> Copy
+          </button>
+        </div>
       </div>
-      <div style="margin-bottom:12px;">
-        <div style="font-size:.7rem;color:#aaa;margin-bottom:4px;">Username</div>
-        <code id="loginLinkUsername" style="font-size:.88rem;font-weight:700;color:#1a1a2e;background:#f3f4f6;padding:4px 10px;border-radius:4px;"></code>
+
+      <!-- Temp password row -->
+      <div style="background:#fefce8;border:1.5px solid #fde68a;border-radius:8px;
+                  padding:12px 16px;margin-bottom:14px;">
+        <div style="font-size:.68rem;color:#6b7280;text-transform:uppercase;
+                    letter-spacing:.06em;margin-bottom:5px;">Temporary Password</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <code id="loginLinkTempPass"
+                style="flex:1;font-size:.92rem;font-weight:700;color:#92400e;
+                       letter-spacing:.08em;"></code>
+          <button id="btnCopyPass" onclick="copyCredential('loginLinkTempPass','btnCopyPass')"
+                  style="background:#d97706;color:#fff;border:none;border-radius:6px;
+                         padding:5px 12px;font-size:.75rem;font-weight:600;cursor:pointer;
+                         font-family:inherit;white-space:nowrap;flex-shrink:0;">
+            <i class="fa-solid fa-copy"></i> Copy
+          </button>
+        </div>
       </div>
-      <p style="font-size:.72rem;color:#f59e0b;">
-        <i class="fa-solid fa-triangle-exclamation"></i> This link can only be used once.
+
+      <p style="font-size:.75rem;color:#888;line-height:1.6;">
+        <i class="fa-solid fa-circle-info" style="color:#2563eb;"></i>
+        The student will be asked to change this password when they first sign in.
+        Share these credentials securely — do not send via public channels.
       </p>
     </div>
     <div class="modal-footer modal-footer-split">
-      <button id="btnCopyLink" class="btn-modal-submit">
-        <i class="fa-solid fa-copy"></i> Copy Link
+      <button id="btnCopyBoth" class="btn-modal-submit">
+        <i class="fa-solid fa-copy"></i> Copy Both
       </button>
       <button class="btn-modal-cancel" data-close="loginLinkModal">Close</button>
     </div>

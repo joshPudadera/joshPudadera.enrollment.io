@@ -106,8 +106,12 @@ require_once __DIR__ . '/../admin_dashboard/sidebar.php';
   <div class="content">
 
     <!-- Breadcrumb -->
-    <div style="padding:16px 24px 0;font-size:.8rem;color:#aaa;">
-      <a href="applicants.php" style="font-size:.82rem;">
+    <div style="padding:16px 24px 0;font-size:.8rem;">
+      <a href="applicants.php"
+         style="display:inline-flex;align-items:center;gap:7px;text-decoration:none;
+                background:#f3f4f6;border:1.5px solid #d0d7e2;border-radius:8px;
+                padding:7px 16px;font-size:.82rem;font-weight:600;color:#1a3a8c;
+                transition:background .14s;">
         <i class="fa-solid fa-arrow-left"></i> Back to Applicants
       </a>
     </div>

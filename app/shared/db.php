@@ -69,6 +69,53 @@ if (isset($_SESSION['regen_on_load']) && !empty($_SESSION['user_id'])) {
 // Ensure students.pre_reg_id column exists (links a student row back to its application)
 @$conn->query("ALTER TABLE students ADD COLUMN IF NOT EXISTS pre_reg_id INT UNSIGNED DEFAULT NULL");
 
+// Ensure must_change_password column exists — set to 1 for new student accounts
+// so they are forced to change their temp password on first login.
+@$conn->query("ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password TINYINT(1) NOT NULL DEFAULT 0");
+
+// ── Activity log table ────────────────────────────────────────
+@$conn->query("CREATE TABLE IF NOT EXISTS activity_logs (
+    id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    actor_id    INT UNSIGNED NOT NULL,
+    actor_name  VARCHAR(150) NOT NULL,
+    actor_role  VARCHAR(30)  NOT NULL DEFAULT 'admin',
+    action      VARCHAR(100) NOT NULL,
+    target_type VARCHAR(60)  DEFAULT NULL,
+    target_id   INT UNSIGNED DEFAULT NULL,
+    target_name VARCHAR(200) DEFAULT NULL,
+    details     TEXT         DEFAULT NULL,
+    ip_address  VARCHAR(45)  DEFAULT NULL,
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_created_at (created_at),
+    INDEX idx_actor_id   (actor_id),
+    INDEX idx_action     (action)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+// ── Helper: log an action ─────────────────────────────────────
+function log_action(mysqli $conn, string $action, string $details = '',
+                    string $target_type = '', int $target_id = 0, string $target_name = ''): void {
+    $actor_id   = (int)($_SESSION['user_id']   ?? 0);
+    $first      = $_SESSION['first_name'] ?? '';
+    $last       = $_SESSION['last_name']  ?? '';
+    $actor_name = trim("$first $last") ?: 'System';
+    $actor_role = $_SESSION['role'] ?? 'admin';
+    $ip         = $_SERVER['REMOTE_ADDR'] ?? '';
+
+    $stmt = $conn->prepare(
+        'INSERT INTO activity_logs (actor_id, actor_name, actor_role, action, target_type, target_id, target_name, details, ip_address)
+         VALUES (?,?,?,?,?,?,?,?,?)'
+    );
+    if (!$stmt) return;
+    $stmt->bind_param('issssisss',
+        $actor_id, $actor_name, $actor_role,
+        $action,
+        $target_type, $target_id, $target_name,
+        $details, $ip
+    );
+    $stmt->execute();
+    $stmt->close();
+}
+
 // ── Helper: check if enrollment tables exist ─────────────────
 function enrollment_tables_exist(mysqli $conn): bool {
     return $conn->query("SHOW TABLES LIKE 'pre_registrations'")->num_rows > 0;

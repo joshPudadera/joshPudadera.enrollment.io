@@ -34,6 +34,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['doc_id'])) {
 // ════════════════════════════════════════════════════
 $gen_search = trim($_GET['gen_q']      ?? '');
 $gen_course = trim($_GET['gen_course'] ?? '');
+$gen_rows_pp = 15;
+$gen_page    = max(1, (int)($_GET['gen_page'] ?? 1));
 
 $gen_where = "1=1";
 if ($gen_search) {
@@ -45,7 +47,10 @@ if ($gen_course) {
     $gen_where .= " AND p.course LIKE '%$esc%'";
 }
 
-// Fetch one row per applicant (use pre_reg_id grouping)
+$gen_total = (int)$conn->query("SELECT COUNT(DISTINCT p.id) c FROM pre_registrations p WHERE $gen_where")->fetch_assoc()['c'];
+$gen_pages = max(1, (int)ceil($gen_total / $gen_rows_pp));
+$gen_page  = min($gen_page, $gen_pages);
+
 $gen_data = [];
 $res = $conn->query(
     "SELECT p.id AS pre_reg_id,
@@ -57,7 +62,8 @@ $res = $conn->query(
      LEFT JOIN enrollment_documents d ON d.pre_reg_id = p.id
      WHERE $gen_where
      GROUP BY p.id
-     ORDER BY p.submitted_at DESC"
+     ORDER BY p.submitted_at DESC
+     LIMIT $gen_rows_pp OFFSET " . (($gen_page - 1) * $gen_rows_pp)
 );
 if ($res) while ($r = $res->fetch_assoc()) $gen_data[] = $r;
 
@@ -277,7 +283,7 @@ $ACTIVE_NAV = 'documents';
         <?php if($gen_search||$gen_course): ?>
         <a href="?tab=generation" style="padding:7px 12px;font-size:.82rem;border:1.5px solid #d0d7e2;border-radius:8px;color:#555;text-decoration:none;">Clear</a>
         <?php endif; ?>
-        <span style="font-size:.78rem;color:#aaa;"><?= count($gen_data) ?> applicant<?= count($gen_data)!==1?'s':'' ?></span>
+        <span style="font-size:.78rem;color:#aaa;"><?= $gen_total ?> applicant<?= $gen_total!==1?'s':'' ?></span>
       </form>
 
       <div style="padding:0 24px;">
@@ -333,13 +339,24 @@ $ACTIVE_NAV = 'documents';
             <?php endif; ?>
             <button class="btn-primary btn-generate-doc"
                     data-pre-reg-id="<?= $appl['pre_reg_id'] ?>"
-                    data-name="<?= $appl_name ?>"
-                    <?= !$has_all ? 'disabled style="opacity:.45;cursor:not-allowed;"' : '' ?>>
+                    data-name="<?= $appl_name ?>">
               <i class="fa-solid fa-file-word"></i> Generate
             </button>
           </div>
         </div>
         <?php endforeach; ?>
+        <!-- Generation tab pagination -->
+        <?php if ($gen_pages > 1): ?>
+        <div class="crud-pagination">
+          <?php
+          $qs_gen = http_build_query(['tab'=>'generation','gen_q'=>$gen_search,'gen_course'=>$gen_course]);
+          if ($gen_page > 1) echo "<a href='?$qs_gen&gen_page=".($gen_page-1)."' class='pg-btn pg-label'>&laquo;</a>";
+          for ($p=max(1,$gen_page-2); $p<=min($gen_pages,$gen_page+2); $p++)
+              echo "<a href='?$qs_gen&gen_page=$p' class='pg-btn".($p===$gen_page?' active':'')."'>$p</a>";
+          if ($gen_page < $gen_pages) echo "<a href='?$qs_gen&gen_page=".($gen_page+1)."' class='pg-btn pg-label'>&raquo;</a>";
+          ?>
+        </div>
+        <?php endif; ?>
       </div>
     </div><!-- end tab-generation -->
 
