@@ -1,27 +1,11 @@
 <?php
-// ============================================================
-//  send_students.php
-//  Sends a single student's details (section, ID number,
-//  grade level, course) to the external logistics system.
-//
-//  Called automatically by enrollment_actions.php whenever
-//  a student is assigned an ID number (generate_id action).
-//
-//  Can also be called manually:
-//    POST /api/send_students.php
-//    Body (JSON): { "pre_reg_id": 42 }
-// ============================================================
 
-// Allow direct inclusion from enrollment_actions.php
-// or standalone HTTP call
 $is_direct_call = (basename(__FILE__) === basename($_SERVER['SCRIPT_FILENAME'] ?? ''));
 
-// DB connection — use shared db.php relative path
 $db_path = __DIR__ . '/../app/shared/db.php';
 if (file_exists($db_path)) {
     require_once $db_path;
 } else {
-    // Fallback: inline minimal connection for standalone use
     $conn = new mysqli(
         getenv('DB_HOST') ?: 'localhost',
         getenv('DB_USER') ?: 'root',
@@ -30,7 +14,7 @@ if (file_exists($db_path)) {
     );
 }
 
-// ── Read the external system URL from .env ────────────────────
+
 function get_external_url(): string {
     $env_file = __DIR__ . '/../app/.env';
     if (file_exists($env_file)) {
@@ -42,11 +26,10 @@ function get_external_url(): string {
             }
         }
     }
-    // Fall back to server env var
     return getenv('EXTERNAL_API_URL') ?: '';
 }
 
-// ── Main function — called with a pre_reg_id ─────────────────
+
 function send_student_to_external(int $pre_reg_id, mysqli $conn): array {
     // Fetch the student's full pipeline data
     $res = $conn->query(
@@ -80,7 +63,6 @@ function send_student_to_external(int $pre_reg_id, mysqli $conn): array {
         return ['success' => false, 'error' => "Student with pre_reg_id $pre_reg_id not found."];
     }
 
-    // Build the payload
     $payload = [
         'student_id'     => $row['student_db_id'],
         'id_number'      => $row['id_number'],
@@ -106,11 +88,9 @@ function send_student_to_external(int $pre_reg_id, mysqli $conn): array {
 
     $json_data = json_encode($payload);
 
-    // ── Send to external system ───────────────────────────────
     $url = get_external_url();
 
     if (!$url) {
-        // URL not configured — log and return the payload anyway
         error_log('[BCP API] EXTERNAL_API_URL not set in .env — student data not sent.');
         return [
             'success' => false,
@@ -147,7 +127,6 @@ function send_student_to_external(int $pre_reg_id, mysqli $conn): array {
     ];
 }
 
-// ── Standalone HTTP call ──────────────────────────────────────
 if ($is_direct_call) {
     header('Content-Type: application/json');
 

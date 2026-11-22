@@ -1,20 +1,7 @@
 <?php
-// ============================================================
-//  receive_students.php
-//  Receives student data pushed from the SMS into this system
-//  (or any external system) and stores it in a local table.
-//
-//  The external system hits this endpoint via POST with JSON.
-//  Creates the received_students table if it does not exist.
-//
-//  POST /api/receive_students.php
-//  Body: JSON object (single student from send_students.php)
-//
-//  Response: { "status": "success", "message": "..." }
-// ============================================================
+
 header('Content-Type: application/json');
 
-// DB connection
 $db_path = __DIR__ . '/../app/shared/db.php';
 if (file_exists($db_path)) {
     require_once $db_path;
@@ -27,7 +14,7 @@ if (file_exists($db_path)) {
     );
 }
 
-// ── Ensure table exists ───────────────────────────────────────
+
 $conn->query("CREATE TABLE IF NOT EXISTS received_students (
     id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     student_id      INT UNSIGNED,
@@ -54,7 +41,7 @@ $conn->query("CREATE TABLE IF NOT EXISTS received_students (
     UNIQUE KEY uniq_id_number (id_number)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-// ── Read incoming JSON ────────────────────────────────────────
+
 $input = file_get_contents('php://input');
 $data  = json_decode($input, true);
 
@@ -64,7 +51,6 @@ if (!$data || !is_array($data)) {
     exit;
 }
 
-// Accept either a single object or an array of objects
 $students = isset($data[0]) ? $data : [$data];
 
 $inserted = 0;
@@ -98,7 +84,6 @@ foreach ($students as $row) {
         continue;
     }
 
-    // Upsert: update if id_number already exists, insert otherwise
     $sql = "INSERT INTO received_students
                 (student_id, id_number, ref_number, first_name, last_name, full_name,
                  birthday, email, phone, course, year_level, section,
