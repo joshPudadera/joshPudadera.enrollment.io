@@ -13,7 +13,8 @@ if ($expected && $received !== $expected) {
 $db_host = getenv('DB_HOST') ?: 'localhost';
 $db_user = getenv('DB_USER') ?: 'root';
 $db_pass = getenv('DB_PASS') ?: '';
-$db_name = getenv('API_TEST1_DB') ?: 'api_test1';
+$db_name = getenv('DB_NAME') ?: 'sms_db';
+$table   = 'api_test1_students';
 
 $input = file_get_contents('php://input');
 $data  = json_decode($input, true);
@@ -27,7 +28,7 @@ if (empty($data) || !is_array($data)) {
 $conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
 if ($conn->connect_error) {
     http_response_code(500);
-    echo json_encode(['status' => 'error', 'message' => 'Cannot connect to ' . $db_name]);
+    echo json_encode(['status' => 'error', 'message' => 'Cannot connect to database.']);
     exit;
 }
 
@@ -41,13 +42,13 @@ foreach ($data as $row) {
 
     if (!$name || !$section || !$year_level) continue;
 
-    $check = $conn->query("SELECT id FROM students WHERE name='$name' AND section='$section' LIMIT 1");
+    $check = $conn->query("SELECT id FROM `$table` WHERE name='$name' AND section='$section' LIMIT 1");
     if ($check && $check->num_rows > 0) {
         $duplicates++;
         continue;
     }
 
-    $conn->query("INSERT INTO students (name, section, year_level, source)
+    $conn->query("INSERT INTO `$table` (name, section, year_level, source)
                   VALUES ('$name', '$section', '$year_level', 'received')");
     $inserted++;
 }
@@ -56,7 +57,7 @@ $conn->close();
 
 echo json_encode([
     'status'     => 'success',
-    'message'    => 'Data received into ' . $db_name,
+    'message'    => 'Data received',
     'inserted'   => $inserted,
     'duplicates' => $duplicates,
 ]);

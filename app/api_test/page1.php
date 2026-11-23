@@ -1,15 +1,16 @@
 <?php
+$DB_HOST  = getenv('DB_HOST') ?: 'localhost';
+$DB_USER  = getenv('DB_USER') ?: 'root';
+$DB_PASS  = getenv('DB_PASS') ?: '';
+$DB_NAME  = getenv('DB_NAME') ?: 'sms_db';
+$TABLE    = 'api_test1_students';
 
-$DB_HOST     = getenv('DB_HOST') ?: 'localhost';
-$DB_USER     = getenv('DB_USER') ?: 'root';
-$DB_PASS     = getenv('DB_PASS') ?: '';
-$DB_NAME     = getenv('API_TEST1_DB')     ?: 'api_test1';
 $SEND_API    = getenv('API_TEST1_SEND_URL')  ?: 'http://localhost/sms/app/api/test1_send.php';
 $RECEIVE_API = getenv('API_TEST2_SEND_URL')  ?: 'http://localhost/sms/app/api/test2_send.php';
 
 $conn = new mysqli($DB_HOST, $DB_USER, $DB_PASS, $DB_NAME);
 if ($conn->connect_error) {
-    die("Cannot connect to <strong>$DB_NAME</strong>. Run <a href='setup.php'>setup.php</a> first.");
+    die("Cannot connect to database. Run <a href='setup.php'>setup.php</a> first.");
 }
 
 $msg     = '';
@@ -20,7 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add')
     $section    = $conn->real_escape_string(trim($_POST['section']    ?? ''));
     $year_level = $conn->real_escape_string(trim($_POST['year_level'] ?? ''));
     if ($name && $section && $year_level) {
-        $conn->query("INSERT INTO students (name, section, year_level, source)
+        $conn->query("INSERT INTO `$TABLE` (name, section, year_level, source)
                       VALUES ('$name', '$section', '$year_level', 'local')");
         $msg = "Added: $name ($section, $year_level)";
     }
@@ -63,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'recei
 }
 
 $students = [];
-$res = $conn->query("SELECT * FROM students ORDER BY created_at DESC");
+$res = $conn->query("SELECT * FROM `$TABLE` ORDER BY created_at DESC");
 if ($res) while ($r = $res->fetch_assoc()) $students[] = $r;
 $conn->close();
 ?>
@@ -71,13 +72,13 @@ $conn->close();
 <html lang="en">
 <head>
   <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Page 1 — <?= htmlspecialchars($DB_NAME) ?></title>
+  <title>Page 1 — System 1</title>
   <link rel="stylesheet" href="css/style.css"/>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"/>
 </head>
 <body>
 <div class="card">
-  <h1><i class="fa-solid fa-database" style="color:#16a34a;"></i> Page 1 — <code><?= htmlspecialchars($DB_NAME) ?></code></h1>
+  <h1><i class="fa-solid fa-database" style="color:#16a34a;"></i> Page 1 — <code><?= htmlspecialchars($TABLE) ?></code></h1>
   <p class="subtitle">Send API: <code>test1_send.php</code> &nbsp;|&nbsp; Receive API: <code>test1_receive.php</code></p>
 
   <?php if ($msg): ?>
@@ -111,7 +112,7 @@ $conn->close();
     </form>
   </div>
 
-  <h2><i class="fa-solid fa-table"></i> Students in <?= htmlspecialchars($DB_NAME) ?> (<?= count($students) ?>)</h2>
+  <h2><i class="fa-solid fa-table"></i> Students in <?= htmlspecialchars($TABLE) ?> (<?= count($students) ?>)</h2>
   <table>
     <thead>
       <tr><th>#</th><th>Name</th><th>Section</th><th>Year Level</th><th>Source</th><th>Added</th><th>Action</th></tr>

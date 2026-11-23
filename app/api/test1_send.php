@@ -4,9 +4,10 @@ header('Content-Type: application/json');
 $db_host     = getenv('DB_HOST') ?: 'localhost';
 $db_user     = getenv('DB_USER') ?: 'root';
 $db_pass     = getenv('DB_PASS') ?: '';
-$db_name     = getenv('API_TEST1_DB')           ?: 'api_test1';
-$receive_url = getenv('API_TEST2_RECEIVE_URL')  ?: '';
-$token       = getenv('API_TEST_TOKEN')         ?: '';
+$db_name     = getenv('DB_NAME') ?: 'sms_db';
+$table       = 'api_test1_students';
+$receive_url = getenv('API_TEST2_RECEIVE_URL') ?: '';
+$token       = getenv('API_TEST_TOKEN')        ?: '';
 
 $student_id = (int)($_GET['id'] ?? 0);
 
@@ -19,14 +20,14 @@ if (!$receive_url) {
 $conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
 if ($conn->connect_error) {
     http_response_code(500);
-    echo json_encode(['status' => 'error', 'message' => 'Cannot connect to ' . $db_name]);
+    echo json_encode(['status' => 'error', 'message' => 'Cannot connect to database.']);
     exit;
 }
 
 if ($student_id > 0) {
-    $result = $conn->query("SELECT name, section, year_level FROM students WHERE id=$student_id LIMIT 1");
+    $result = $conn->query("SELECT name, section, year_level FROM `$table` WHERE id=$student_id LIMIT 1");
 } else {
-    $result = $conn->query("SELECT name, section, year_level FROM students WHERE source != 'sent'");
+    $result = $conn->query("SELECT name, section, year_level FROM `$table` WHERE source != 'sent'");
 }
 
 $data = [];
@@ -61,9 +62,9 @@ if ($response === false) {
 $resp = json_decode($response, true);
 if (($resp['status'] ?? '') === 'success') {
     if ($student_id > 0) {
-        $conn->query("UPDATE students SET source='sent' WHERE id=$student_id");
+        $conn->query("UPDATE `$table` SET source='sent' WHERE id=$student_id");
     } else {
-        $conn->query("UPDATE students SET source='sent' WHERE source != 'sent'");
+        $conn->query("UPDATE `$table` SET source='sent' WHERE source != 'sent'");
     }
 }
 
