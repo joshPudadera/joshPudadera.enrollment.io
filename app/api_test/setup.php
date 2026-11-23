@@ -1,6 +1,11 @@
 <?php
 mysqli_report(MYSQLI_REPORT_OFF);
-$conn = new mysqli('localhost', 'root', '');
+
+$host = getenv('DB_HOST') ?: 'localhost';
+$user = getenv('DB_USER') ?: 'root';
+$pass = getenv('DB_PASS') ?: '';
+
+$conn = new mysqli($host, $user, $pass);
 if ($conn->connect_error) {
     die("Cannot connect to MySQL: " . $conn->connect_error);
 }
