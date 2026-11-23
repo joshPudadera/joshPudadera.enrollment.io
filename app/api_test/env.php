@@ -3,7 +3,7 @@ function env(string $key, string $default = ''): string {
     static $cache = null;
     if ($cache === null) {
         $cache = [];
-        $file = __DIR__ . '/../app/.env';
+        $file = __DIR__ . '/../.env';
         if (!file_exists($file)) return $default;
         foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
             $line = trim($line);
